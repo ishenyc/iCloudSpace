@@ -1,0 +1,90 @@
+name: ${SPACE_PROJECT_NAME:?set a unique installation name}
+
+x-postgres-image: &postgres-image postgres:17.11-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+
+services:
+  provision:
+    image: *postgres-image
+    profiles: [setup]
+    user: "0:0"
+    network_mode: none
+    entrypoint: [/bin/sh, -eu, -c]
+    command:
+      - |
+        test -z "$$(ls -A /configuration)"
+        test -z "$$(ls -A /database-secrets)"
+        test -z "$$(ls -A /content)"
+        cp /seed/process.json /seed/initialize.json /seed/database.dsn /seed/master.key /seed/admin-password /seed/tls.crt /seed/tls.key /configuration/
+        cp /seed/postgres-password /database-secrets/postgres-password
+        chown -R 65532:65532 /configuration /content
+        chmod 700 /configuration /content
+        chmod 600 /configuration/*
+        chown -R postgres:postgres /database-secrets
+        chmod 700 /database-secrets
+        chmod 600 /database-secrets/postgres-password
+    volumes:
+      - type: bind
+        source: ${SPACE_RUNTIME_DIRECTORY:?absolute private installation directory}/seed
+        target: /seed
+        read_only: true
+        bind:
+          create_host_path: false
+      - configuration:/configuration
+      - database-secrets:/database-secrets
+      - content:/content
+
+  postgres:
+    image: *postgres-image
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: icloudspace
+      POSTGRES_USER: icloudspace
+      POSTGRES_PASSWORD_FILE: /run/db-secrets/postgres-password
+    volumes:
+      - database:/var/lib/postgresql/data
+      - database-secrets:/run/db-secrets:ro
+    healthcheck:
+      test: [CMD, pg_isready, -q, -h, 127.0.0.1, -U, icloudspace, -d, icloudspace]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    stop_grace_period: 60s
+
+  app:
+    image: ${SPACE_APP_IMAGE:?set a local application image name}
+    build:
+      context: .
+      target: application
+    user: "65532:65532"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      TZ: UTC
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: [-process, /run/space/process.json]
+    ports:
+      - "127.0.0.1:${SPACE_HTTP_PORT:-8080}:8080"
+      - "127.0.0.1:${SPACE_IMAPS_PORT:-1993}:1993"
+    volumes:
+      - configuration:/run/space:ro
+      - content:/content
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=67108864,mode=1777
+    healthcheck:
+      test: [CMD, /icloudspace-health, -address, 127.0.0.1:8080]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+    stop_grace_period: 90s
+
+volumes:
+  database:
+  database-secrets:
+  configuration:
+  content:

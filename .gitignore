@@ -1,0 +1,42 @@
+# Dependencies and build outputs
+node_modules/
+dist/
+.vite/
+.cache/
+bin/
+release/
+coverage/
+*.tsbuildinfo
+*.test
+coverage.out
+backend/icloudspace
+
+# Runtime configuration, credentials and persistent data
+.env
+.env.*
+!.env.example
+!*.env.example
+runtime/
+data/
+backups/
+exports/
+*.db
+*.db-*
+*.sqlite*
+*.dump
+*.sql.gz
+*.key
+*.pem
+*.p12
+*.pfx
+*.log
+*.eml
+*.mbox
+
+# Local editor and operating-system files
+.DS_Store
+._*
+.idea/
+.vscode/
+__pycache__/
+*.py[cod]

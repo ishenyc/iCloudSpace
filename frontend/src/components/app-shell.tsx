@@ -1,0 +1,86 @@
+import { useEffect, useLayoutEffect, useState } from 'react'
+import { Link, Outlet, useLocation, useSearchParams } from 'react-router-dom'
+import { Activity, Archive, BookOpen, ChevronDown, ChevronRight, Cloud, Folder, FolderOpen, Layers2, LogOut, Mail, Menu, Monitor, Moon, Plus, Search, Server, Settings2, ShieldCheck, Sun, Ungroup } from 'lucide-react'
+import { useAuth } from '../lib/auth'
+import { useControl } from '../lib/control'
+import { LocalCleanupStatus } from '../features/local-cleanup'
+import { aliasGroupPath, aliasViewPath } from '../features/alias-archive'
+import type { AddressGroup } from '../control/address-contracts'
+import { useResource } from '../lib/hooks'
+import { useAppearance } from '../lib/appearance'
+import { AnimatePresence, AnimatedSection, m, motionEase, useReducedMotion } from '../lib/motion'
+import { LayoutGroup } from 'motion/react'
+import { Suspense, useId } from 'react'
+import { APP_VERSION } from '../lib/version'
+import { SidebarToggleIcon, ThemeIcon, FolderStateIcon } from './animated-icon'
+import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group'
+import { Button, Input, Modal, Sheet, Tip, Loading, useToast } from './ui'
+import { RefreshButton } from './refresh-button'
+import { RefreshRegion } from './refresh-region'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuRadioGroup, DropdownMenuRadioItem } from './ui/dropdown-menu'
+
+const navigation = [
+  { path: '/accounts', label: '主号管理', icon: Server, description: '连接与同步' },
+  { path: '/aliases', label: '邮箱管理', icon: Mail, description: '地址与分组' },
+  { path: '/activity', label: '运行与记录', icon: Activity, description: '日志与操作记录' },
+  { path: '/security', label: '安全设置', icon: Settings2, description: '管理员与凭据' },
+]
+const appearances = [{ key: 'dark', label: '深色模式', icon: Moon }, { key: 'light', label: '亮色模式', icon: Sun }, { key: 'system', label: '跟随系统', icon: Monitor }] as const
+
+export function AppearanceMenu({ compact = false, tooltips = true }: { compact?: boolean; tooltips?: boolean }) {
+  const [theme, setTheme] = useAppearance()
+  const scope = useId()
+  return <div className={`appearance-row ${compact ? 'compact' : ''}`}><span className="appearance-label" aria-hidden={compact || undefined}><ThemeIcon theme={theme} />外观</span><LayoutGroup id={scope}><ToggleGroup type="single" orientation={compact ? 'vertical' : 'horizontal'} value={theme} onValueChange={value => { if (value) setTheme(value as typeof theme) }} aria-label="外观模式" className="theme-selector">{appearances.map((item, index) => <Tip label={item.label} key={item.key} enabled={tooltips}><ToggleGroupItem value={item.key} aria-label={item.label} className="theme-option" style={{ transform: compact ? `translate3d(0,${index * 27}px,0)` : `translate3d(${index * 27}px,0,0)` }}>{theme === item.key && <m.span layoutId="theme-active" className="theme-active" transition={{ duration: 0.2, ease: motionEase }} />}<span className="theme-glyph"><item.icon /></span></ToggleGroupItem></Tip>)}</ToggleGroup></LayoutGroup></div>
+}
+
+export function AppShell() {
+  const auth = useAuth(); const toast = useToast(); const location = useLocation(); const [search] = useSearchParams()
+  const { addresses } = useControl()
+  const [manualCollapsed, setManualCollapsed] = useState<boolean | null>(() => { try { const value = localStorage.getItem('icloudspace-sidebar-collapsed'); return value === null ? null : value === 'true' } catch { return null } })
+  const [compactViewport, setCompactViewport] = useState(() => matchMedia('(max-width: 1100px)').matches)
+  const collapsed = compactViewport || manualCollapsed === true
+  const reduced = useReducedMotion()
+  const scope = useId()
+  const [mobileOpen, setMobileOpen] = useState(false); const [contextOpen, setContextOpen] = useState(false)
+  const [groupsOpen, setGroupsOpen] = useState(true); const [commandOpen, setCommandOpen] = useState(false)
+  const [commandQuery, setCommandQuery] = useState(''); const [loggingOut, setLoggingOut] = useState(false)
+  const isAliases = location.pathname.startsWith('/aliases'); const isArchived = location.pathname === '/aliases/archived'; const isActivity = location.pathname.startsWith('/activity')
+  const current = isArchived ? '归档邮箱' : navigation.find(item => location.pathname.startsWith(item.path))?.label || '安全设置'
+  const groups = useResource<AddressGroup[]>(signal => isAliases ? addresses.groups(signal).then(response => response.result) : Promise.resolve([]), [isAliases, addresses])
+  useEffect(() => { const refresh = () => { void groups.refresh() }; window.addEventListener('icloudspace:groups', refresh); return () => window.removeEventListener('icloudspace:groups', refresh) }, [groups.refresh])
+  useEffect(() => { setMobileOpen(false); setContextOpen(false) }, [location.pathname, location.search])
+  useLayoutEffect(() => { window.scrollTo(0, 0) }, [location.pathname])
+  useEffect(() => { const media = matchMedia('(max-width: 1100px)'); const change = () => setCompactViewport(media.matches); media.addEventListener('change', change); return () => media.removeEventListener('change', change) }, [])
+  useEffect(() => { const keys = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (document.querySelector('[role="dialog"]') && !document.querySelector('.command-list')) return; setCommandOpen(open => !open) } }; window.addEventListener('keydown', keys); return () => window.removeEventListener('keydown', keys) }, [])
+  const toggleSidebar = () => { if (compactViewport) { setMobileOpen(true); return }; const value = !collapsed; setManualCollapsed(value); try { localStorage.setItem('icloudspace-sidebar-collapsed', String(value)) } catch {} }
+  const navigationLabel = compactViewport ? '打开导航' : collapsed ? '展开侧边栏' : '收起侧边栏'
+  const performLogout = async () => { if (loggingOut) return; setLoggingOut(true); try { await auth.logout() } catch (error: any) { toast(error.message, 'error') } finally { setLoggingOut(false) } }
+  const groupLink = (id: string) => aliasGroupPath(id, search)
+  const mailboxViewLink = (view: 'current' | 'archived') => { const query = new URLSearchParams(search); query.delete('groupId'); query.delete('manageGroups'); return aliasViewPath(view, query) }
+  const groupManagerParams = new URLSearchParams(search); groupManagerParams.set('manageGroups', '1')
+  const groupManagerLink = aliasViewPath(isArchived ? 'archived' : 'current', groupManagerParams)
+  const contextNavigation = <nav aria-label="当前页面导航" className="context-navigation">{isAliases ? <>
+    <div className="nav-section-label">邮箱空间</div>
+    <Link className={`context-link ${!isArchived && !search.get('groupId') ? 'active' : ''}`} to={mailboxViewLink('current')} aria-current={!isArchived && !search.get('groupId') ? 'page' : undefined}><Layers2 /><span>当前邮箱</span></Link>
+    <Link className={`context-link ${isArchived ? 'active' : ''}`} to={mailboxViewLink('archived')} aria-current={isArchived ? 'page' : undefined}><Archive /><span>归档邮箱</span></Link>
+    <Link className={`context-link ${!isArchived && search.get('groupId') === 'none' ? 'active' : ''}`} to={groupLink('none')} aria-current={!isArchived && search.get('groupId') === 'none' ? 'page' : undefined}><Ungroup /><span>未分组</span></Link>
+    <Collapsible open={groupsOpen} onOpenChange={setGroupsOpen} className="nav-groups"><div className="nav-group-heading"><CollapsibleTrigger className="nav-section-label"><span>我的分组</span><ChevronDown className="group-chevron" /></CollapsibleTrigger><Button asChild variant="ghost" size="icon" className="size-6" aria-label="管理分组"><Link to={groupManagerLink}><Plus /></Link></Button></div><CollapsibleContent className="nav-tree-collapse"><RefreshRegion loading={groups.manualRefreshing} label="正在刷新分组…"><div className="context-tree">{groups.data?.map(group => <Link key={group.id} to={groupLink(String(group.id))} className={`context-link ${!isArchived && search.get('groupId') === String(group.id) ? 'active' : ''}`} aria-current={!isArchived && search.get('groupId') === String(group.id) ? 'page' : undefined}><FolderStateIcon open={!isArchived && search.get('groupId') === String(group.id)} size={15} /><span>{group.name}</span>{!isArchived && <span className="context-count" title="分组总数（含归档地址）" aria-label={`分组总数（含归档地址）：${group.address_count}`}>{group.address_count}</span>}</Link>)}{groups.loading && <Loading label="正在读取分组…" />}{groups.error && <RefreshButton variant="ghost" size="sm" pending={groups.loading || groups.manualRefreshing} onRefresh={groups.refresh}>读取失败，重试</RefreshButton>}{groups.data?.length === 0 && <p className="section-note">尚未建立分组</p>}</div></RefreshRegion></CollapsibleContent></Collapsible>
+  </> : isActivity ? <><div className="nav-section-label">记录</div><Link to="/activity" className={`context-link ${search.get('tab') !== 'audit' ? 'active' : ''}`}><Activity /><span>运行日志</span></Link><Link to="/activity?tab=audit" className={`context-link ${search.get('tab') === 'audit' ? 'active' : ''}`}><ShieldCheck /><span>操作记录</span></Link></> : <><div className="nav-section-label">工作空间</div><Link to="/accounts/new" className={`context-link ${location.pathname === '/accounts/new' ? 'active' : ''}`}><Plus /><span>添加主号</span></Link><Link to="/aliases" className="context-link"><Layers2 /><span>所有隐私邮箱</span></Link></>}</nav>
+  const sidebarContent = (compact: boolean, mobile = false) => <>
+    <div className="sidebar-heading"><Link to="/accounts" className="sidebar-brand" aria-label="iCloudSpace 主号管理"><span className="brand-mark"><Cloud strokeWidth={1.65} /></span><span className="brand-name" aria-hidden={compact || undefined}>iCloudSpace<small>{APP_VERSION.slice(0,3)}</small></span></Link></div>
+    <Tip label="快速前往 ⌘ K" enabled={compact}><Button variant="outline" className="sidebar-search" aria-label="打开页面导航" onClick={() => { setMobileOpen(false); setContextOpen(false); setCommandOpen(true) }}><Search /><span className="sidebar-search-label" aria-hidden={compact || undefined}><span>搜索页面</span><span className="sidebar-shortcut"><kbd>⌘</kbd><kbd>K</kbd></span></span></Button></Tip>
+    <div className="sidebar-scroll"><LayoutGroup id={`${scope}-${mobile ? 'mobile' : 'desktop'}`}><nav className="primary-navigation" aria-label="全局导航">{navigation.map(item => { const active = location.pathname.startsWith(item.path); return <Tip key={item.path} label={item.label} enabled={compact}><Link className={`nav-item ${active ? 'active' : ''}`} to={item.path} aria-label={item.label} aria-current={active ? 'page' : undefined}>{active && <m.span layoutId="navigation-active" className="navigation-active" transition={{ duration: reduced ? 0 : 0.24, ease: motionEase }} />}<span className="navigation-icon"><item.icon /></span><span className="nav-label" aria-hidden={compact || undefined}>{item.label}</span></Link></Tip> })}<Tip label="API 文档" enabled={compact}><a className="nav-item" href="/docs/" target="_blank" rel="noopener noreferrer" aria-label="API 文档（新标签页）"><span className="navigation-icon"><BookOpen /></span><span className="nav-label" aria-hidden={compact || undefined}>API 文档</span></a></Tip></nav></LayoutGroup><div className="sidebar-context" aria-hidden={compact || undefined} inert={compact || undefined}><div>{contextNavigation}</div></div>{(isAliases || isActivity) && <div className="sidebar-context-shortcut" aria-hidden={!compact || undefined} inert={!compact || undefined}><div><div className="sidebar-divider" /><Tip label={isAliases ? '邮箱分组' : '记录分类'} enabled={compact}><Button variant="ghost" className="nav-item" aria-label={isAliases ? '打开邮箱分组' : '打开记录分类'} onClick={() => setContextOpen(true)}><Folder /></Button></Tip></div></div>}</div>
+    <div className="sidebar-bottom"><AppearanceMenu compact={compact} tooltips={compact} />
+      <div className="sidebar-divider" />
+      <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" className="profile-trigger" aria-label="管理员菜单"><span className="avatar">{auth.session?.username.slice(0, 1).toUpperCase()}<span className="avatar-status" /></span><span className="profile-text" aria-hidden={compact || undefined}><strong>{auth.session?.username}</strong><small>管理员</small></span><ChevronDown className="profile-chevron" /></Button></DropdownMenuTrigger><DropdownMenuContent side={compact ? 'right' : 'top'} align="start" sideOffset={10} className="w-52"><DropdownMenuLabel>{auth.session?.username}</DropdownMenuLabel><DropdownMenuSeparator /><DropdownMenuItem asChild><Link to="/security"><ShieldCheck />安全设置</Link></DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem disabled={loggingOut} onSelect={() => void performLogout()}><LogOut />{loggingOut ? '正在退出…' : '退出登录'}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
+    </div>
+  </>
+  const commandItems = [...navigation, { path: '/aliases/archived', label: '归档邮箱', icon: Archive, description: '查看已归档地址及历史邮件' }, { path: '/accounts/new', label: '添加主号', icon: Plus, description: '连接新的邮箱来源' }, { path: '/activity?tab=audit', label: '操作记录', icon: ShieldCheck, description: '查看配置变更' }].filter(item => (item.label + item.description).includes(commandQuery.trim()))
+  return <LayoutGroup id={`${scope}-workspace`}><div className="app-shell" data-collapsed={collapsed}>
+    <Link className="skip-link" to={`${location.pathname}${location.search}#main-content`} onClick={event => { event.preventDefault(); const main = document.getElementById('main-content'); main?.focus(); main?.scrollIntoView({ block: 'start' }) }}>跳转到内容</Link>
+    <aside id={`${scope}-sidebar`} className="sidebar" aria-label="工作台导航"><div className="sidebar-surface" aria-hidden="true" />{sidebarContent(collapsed)}</aside>
+    <div className="content-shell"><header className="topbar"><div className="topbar-start"><Tip label={navigationLabel}><Button variant="ghost" size="icon" className="workspace-navigation-toggle" aria-label={navigationLabel} aria-expanded={compactViewport ? mobileOpen : !collapsed} aria-controls={compactViewport ? `${scope}-mobile-navigation` : `${scope}-sidebar`} aria-haspopup={compactViewport ? 'dialog' : undefined} onClick={toggleSidebar}>{compactViewport ? <Menu /> : <SidebarToggleIcon collapsed={collapsed} size={16} />}</Button></Tip><span className="topbar-divider" aria-hidden="true" /><nav className="breadcrumb" aria-label="面包屑"><Link to="/accounts">工作空间</Link><ChevronRight /><span>{current}</span>{location.pathname.match(/accounts\/\d/) && <><ChevronRight /><span>主号详情</span></>}</nav></div><div className="topbar-end"><span className="connection-state"><span className="status-dot" />管理员会话</span><Button variant="ghost" size="icon" aria-label="快速前往" onClick={() => { setMobileOpen(false); setContextOpen(false); setCommandOpen(true) }}><Search /></Button></div></header><main className="main" id="main-content" tabIndex={-1}><LocalCleanupStatus /><Suspense fallback={<Loading label="正在打开页面" />}><AnimatedSection key={location.pathname} className="route-content"><Outlet /></AnimatedSection></Suspense></main><footer className="page-footer"><span>iCloudSpace <span className="version-label">v{APP_VERSION}</span></span><span>你的隐私邮箱空间</span></footer></div>
+    <AnimatePresence initial={false} mode="wait">{mobileOpen ? <Sheet key="mobile-navigation" open onOpenChange={setMobileOpen} title="导航"><div id={`${scope}-mobile-navigation`} className="mobile-sidebar">{sidebarContent(false, true)}</div></Sheet> : contextOpen ? <Sheet key="context-navigation" open onOpenChange={setContextOpen} title={isAliases ? '邮箱空间' : '运行与记录'}>{contextNavigation}</Sheet> : commandOpen ? <Modal key="command-navigation" open onOpenChange={setCommandOpen} title="快速前往" description="搜索页面与操作入口"><div className="command-search"><Search /><Input autoFocus value={commandQuery} onChange={event => setCommandQuery(event.target.value)} placeholder="搜索页面…" aria-label="搜索页面" onKeyDown={event => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const links = event.currentTarget.closest('[role="dialog"]')?.querySelectorAll<HTMLAnchorElement>('.command-item'); if (links?.length) links[event.key === 'ArrowDown' ? 0 : links.length - 1].focus() } }} /></div><nav className="command-list" aria-label="搜索结果" onKeyDown={event => { if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return; const links = Array.from(event.currentTarget.querySelectorAll('a')); const index = links.indexOf(document.activeElement as HTMLAnchorElement); event.preventDefault(); if (event.key === 'ArrowUp' && index === 0) { event.currentTarget.closest('[role="dialog"]')?.querySelector<HTMLInputElement>('input')?.focus() } else { links[(index + (event.key === 'ArrowDown' ? 1 : -1) + links.length) % links.length]?.focus() } }}>{commandItems.map(item => <Link key={item.path} className="command-item" to={item.path} onClick={() => { setCommandOpen(false); setCommandQuery('') }}><item.icon /><span>{item.label}<small>{item.description}</small></span><ChevronRight /></Link>)}{!commandItems.length && <p className="section-note">没有匹配的页面</p>}</nav></Modal> : null}</AnimatePresence>
+  </div></LayoutGroup>
+}

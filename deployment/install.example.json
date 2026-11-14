@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "process_file": "/run/space/process.json",
+  "expected_database": "icloudspace",
+  "operator_login": "admin",
+  "password_file": "/run/space/admin-password",
+  "management_path": "/admin",
+  "settings": {
+    "http_address": "0.0.0.0:8080",
+    "imaps_address": "0.0.0.0:1993",
+    "public_host": "localhost",
+    "tls_certificate_file": "/run/space/tls.crt",
+    "tls_private_key_file": "/run/space/tls.key",
+    "archive_capacity_bytes": "10737418240",
+    "sync_concurrency": 4,
+    "sync_rest_milliseconds": "20000",
+    "allow_weak_recipient_evidence": false
+  }
+}

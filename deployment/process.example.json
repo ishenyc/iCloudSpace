@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "installation_id": "REPLACE_WITH_UNIQUE_INSTALLATION_ID",
+  "database_dsn_file": "/run/space/database.dsn",
+  "master_key_file": "/run/space/master.key",
+  "blob_directory": "/content",
+  "web_directory": "/web",
+  "session_ttl_seconds": 3600,
+  "maximum_sources": 100,
+  "force_secure_cookies": false
+}
