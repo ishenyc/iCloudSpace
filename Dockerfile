@@ -7,7 +7,7 @@ COPY frontend/src/ ./src/
 COPY frontend/public/ ./public/
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM golang:1.26.10-bookworm@sha256:23ce71337b726608afb1bc00986e630a05034a87a87ea1fc2cd1ae5cf33387eb AS go-source
+FROM --platform=$BUILDPLATFORM golang:1.27.0-bookworm@sha256:ded31c68586d2e49e760acc2e65a884b23d032e9bbbed0ae0c55abd3fcaf4452 AS go-source
 ENV GOTOOLCHAIN=local GOWORK=off CGO_ENABLED=0
 WORKDIR /work
 COPY backend/go.mod backend/go.sum ./
