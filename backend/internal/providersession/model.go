@@ -89,6 +89,7 @@ const (
 	VerifySMS           Action = "verify_sms"
 	VerifySecurityKey   Action = "verify_security_key"
 	TrustBrowser        Action = "trust_browser"
+	DeclineTrust        Action = "decline_trust"
 	ExchangeToken       Action = "exchange_token"
 	ValidateSession     Action = "validate_session"
 	RestoreSession      Action = "restore_session"
@@ -144,6 +145,8 @@ type AuthResult struct {
 	State                  string
 	Session                SessionInfo
 	Receipt                ActionReceipt
+	ProviderStatus         int
+	ProviderCode           string
 	Options                *apple.AuthOptions
 	NextAction             Action
 	RequestSessionRevision int64
@@ -209,7 +212,18 @@ func scopeValid(s Scope) bool {
 func safeCode(err error) string {
 	var provider *apple.Error
 	if errors.As(err, &provider) {
-		return string(provider.Kind)
+		kind := string(provider.Kind)
+		if provider.Kind == apple.SecondFactorRequired || provider.Status < 100 || provider.Status > 599 {
+			return kind
+		}
+		// Keep the original capsule schema readable by previous versions.
+		// Only numeric Apple failure codes and fixed local reasons are stored.
+		code := provider.Code
+		number, parseErr := strconv.Atoi(code)
+		if code != "PRINCIPAL_MISMATCH" && code != "SERVICE_ORIGIN" && (parseErr != nil || number >= 0 || number < -9999999 || strconv.Itoa(number) != code) {
+			code = ""
+		}
+		return kind + ":" + strconv.Itoa(provider.Status) + ":" + code
 	}
 	if errors.Is(err, context.Canceled) {
 		return "cancelled"
@@ -228,7 +242,10 @@ func actionOutcome(err error) Outcome {
 	}
 	var provider *apple.Error
 	if errors.As(err, &provider) {
-		if provider.Operation == "authorize_shell" {
+		if provider.Code == "PRINCIPAL_MISMATCH" {
+			return Rejected // The local identity check definitively refused this login.
+		}
+		if provider.Operation == "authorize_shell" || provider.Operation == "load_challenge" {
 			return NotSent
 		}
 		if provider.Unknown {

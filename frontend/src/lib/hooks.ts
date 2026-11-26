@@ -46,7 +46,9 @@ export function useResource<T = any>(loader: (signal: AbortSignal) => Promise<T>
         if (initialVisibleAt) await waitForFeedback(240 - (performance.now() - initialVisibleAt))
       }
       if (manual) { manualOwner = id; setManualKey(depsKey) }
-      setRefreshing(true); setFailure(null)
+      setRefreshing(true)
+      // Keep a background failure mounted until a poll actually recovers.
+      if (manual) setFailure(null)
       try { const next = await load(signal); await settleInitialFeedback(); if (alive && id === generation) { hasResult = true; setResult({ data: next, key: depsKey }); setFailure(null) } }
       catch (e: any) { await settleInitialFeedback(); if (alive && id === generation && e?.name !== 'AbortError') setFailure({ error: e, key: depsKey }) }
       finally {

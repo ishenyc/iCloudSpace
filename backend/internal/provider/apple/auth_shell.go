@@ -56,11 +56,12 @@ type wireKey struct {
 	KeyHandles []string `json:"keyHandles"`
 }
 type shellData struct {
-	AuthType       string `json:"authType"`
-	AuthAttributes string `json:"authAttributes"`
-	Country        string `json:"countryCode"`
-	ReferrerQuery  string `json:"referrerQuery"`
-	TwoSV          struct {
+	HasTrustedDevices bool   `json:"hasTrustedDevices"`
+	AuthType          string `json:"authType"`
+	AuthAttributes    string `json:"authAttributes"`
+	Country           string `json:"countryCode"`
+	ReferrerQuery     string `json:"referrerQuery"`
+	TwoSV             struct {
 		AuthType string          `json:"authType"`
 		Factors  []string        `json:"authFactors"`
 		Device   json.RawMessage `json:"deviceVerification"`
@@ -262,7 +263,7 @@ func ParseAuthShell(body []byte) (*AuthFlow, string, string, error) {
 		if json.Unmarshal(raw, &fields) != nil {
 			return nil, "", "", ErrSession
 		}
-		for _, key := range []string{"authType", "authAttributes", "countryCode", "referrerQuery", "twoSV"} {
+		for _, key := range []string{"authType", "authAttributes", "countryCode", "referrerQuery", "hasTrustedDevices", "twoSV"} {
 			if value, ok := fields[key]; ok {
 				if previous, exists := merged[key]; exists && !bytes.Equal(previous, value) {
 					return nil, "", "", ErrSession
@@ -284,18 +285,27 @@ func ParseAuthShell(body []byte) (*AuthFlow, string, string, error) {
 	for _, factor := range data.TwoSV.Factors {
 		factors[factor] = true
 	}
-	flow.Options.TrustedDevice = len(data.TwoSV.Device) > 0 && string(data.TwoSV.Device) != "null"
+	device := len(data.TwoSV.Device) > 0 && string(data.TwoSV.Device) != "null" && string(data.TwoSV.Device) != "false"
+	flow.Options.TrustedDevice = factors["push"] || factors["generatedcode"] ||
+		len(factors) == 0 && (data.HasTrustedDevices || device)
 	phones := data.TwoSV.Phone.Phones
+	listedPhones := len(phones)
+	if listedPhones > 20 {
+		return nil, "", "", ErrSession
+	}
 	if data.TwoSV.Phone.Phone != nil {
 		phones = append(phones, *data.TwoSV.Phone.Phone)
 	}
-	if len(phones) > 20 {
-		return nil, "", "", ErrSession
-	}
 	seen := map[string]bool{}
-	for _, phone := range phones {
+	for index, phone := range phones {
 		id, numeric, err := phoneID(phone.ID)
-		if err != nil || seen[id] {
+		if err != nil {
+			return nil, "", "", ErrSession
+		}
+		if seen[id] {
+			if index == listedPhones {
+				continue // The selected phone may also appear in trustedPhoneNumbers.
+			}
 			return nil, "", "", ErrSession
 		}
 		seen[id] = true
@@ -337,16 +347,37 @@ func (c *Client) AuthorizeShell(ctx context.Context) (AuthOptions, error) {
 	}
 	defer c.unlock()
 	q := url.Values{"frame_id": {c.document.Browser.FrameID}, "iframeId": {c.document.Browser.FrameID}, "client_id": {widgetKey}, "redirect_uri": {homeOrigin(c.document.Principal.Region)}, "response_type": {"code"}, "response_mode": {"web_message"}, "state": {c.document.Browser.FrameID}, "skVersion": {"7"}, "authVersion": {"latest"}, "isSRPEnabled": {"true"}}
-	response, err := c.exchangeShellLocked(ctx, "authorize_shell", authOrigin+"/authorize/signin?"+q.Encode())
+	return c.readAuthShellLocked(ctx, "authorize_shell", authOrigin+"/authorize/signin?"+q.Encode())
+}
+
+// LoadChallengeOptions reads the authenticated MFA resource using the headers
+// rotated by SRP. Apple may return the challenge document with HTTP 409.
+func (c *Client) LoadChallengeOptions(ctx context.Context) (AuthOptions, error) {
+	if err := c.lock(ctx); err != nil {
+		return AuthOptions{}, err
+	}
+	defer c.unlock()
+	c.document.AuthFlow = nil
+	if !c.document.Assurance.HSAChallengeRequired || c.document.Authentication.SessionID == "" || c.document.Authentication.SCNT == "" {
+		return AuthOptions{}, &Error{Kind: AuthenticationRequired, Operation: "load_challenge"}
+	}
+	return c.readAuthShellLocked(ctx, "load_challenge", authOrigin)
+}
+
+func (c *Client) readAuthShellLocked(ctx context.Context, operation, endpoint string) (AuthOptions, error) {
+	response, err := c.exchangeShellLocked(ctx, operation, endpoint)
 	if err != nil {
 		return AuthOptions{}, err
 	}
-	if response.status < http.StatusOK || response.status >= http.StatusMultipleChoices {
-		return AuthOptions{}, &Error{Kind: AuthenticationRequired, Operation: "authorize_shell", Status: response.status}
+	if (response.status < http.StatusOK || response.status >= http.StatusMultipleChoices) && !(operation == "load_challenge" && response.status == http.StatusConflict) {
+		return AuthOptions{}, &Error{Kind: AuthenticationRequired, Operation: operation, Status: response.status}
 	}
 	flow, attributes, country, err := ParseAuthShell(response.body)
 	if err != nil {
-		return AuthOptions{}, &Error{Kind: MalformedResponse, Operation: "authorize_shell", Status: response.status}
+		return AuthOptions{}, &Error{Kind: MalformedResponse, Operation: operation, Status: response.status}
+	}
+	if operation == "load_challenge" && !flow.Options.TrustedDevice && !flow.Options.SMS && len(flow.Options.SecurityKeys) == 0 {
+		return AuthOptions{}, &Error{Kind: ChallengeUnavailable, Operation: operation, Status: response.status}
 	}
 	c.document.AuthFlow = flow
 	if attributes != "" {

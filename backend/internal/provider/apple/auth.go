@@ -106,25 +106,15 @@ func (c *Client) VerifyDeviceCode(ctx context.Context, code string) error {
 	if err != nil {
 		return err
 	}
-	// An accepted 409 is an observed Apple HSA2 shape, not general permission
-	// to treat every conflict as success. Require its explicit valid boolean.
-	if response.status == http.StatusConflict {
-		var verdict struct {
-			SecurityCode struct {
-				Valid *bool `json:"valid"`
-			} `json:"securityCode"`
-		}
-		if json.Unmarshal(response.body, &verdict) == nil && verdict.SecurityCode.Valid != nil && *verdict.SecurityCode.Valid {
-			return nil
-		}
-	}
-	return diagnose("verify_device_code", response, true)
+	return deviceCodeVerdict(response)
 }
 
 // TrustSession is explicit and uses a fresh one-attempt transport because
 // Apple's protocol spells this state-changing operation as GET. It does not
 // perform the subsequent regional token exchange on the caller's behalf.
-func (c *Client) TrustSession(ctx context.Context) error {
+func (c *Client) TrustSession(ctx context.Context) error { return c.BrowserTrust(ctx, true) }
+
+func (c *Client) BrowserTrust(ctx context.Context, trust bool) error {
 	if err := c.lock(ctx); err != nil {
 		return err
 	}
@@ -132,16 +122,28 @@ func (c *Client) TrustSession(ctx context.Context) error {
 	if c.document.Authentication.SessionID == "" || c.document.Authentication.SCNT == "" {
 		return &Error{Kind: AuthenticationRequired, Operation: "trust_session"}
 	}
-	response, err := c.exchangeLocked(ctx, "trust_session", http.MethodGet, authOrigin+"/2sv/trust", nil, true, true)
+	path := "/2sv/donttrust"
+	if trust {
+		path = "/2sv/trust"
+	}
+	response, err := c.exchangeLocked(ctx, "trust_session", http.MethodGet, authOrigin+path, nil, true, true)
 	if err != nil {
 		return err
 	}
-	return diagnose("trust_session", response, true)
+	if err := diagnose("trust_session", response, true); err != nil {
+		return err
+	}
+	if !trust {
+		c.document.Authentication.TrustToken = ""
+	}
+	return nil
 }
 
 // ExchangeToken exchanges the current Apple authentication token for regional
 // web cookies and provider discovery. It never sends an account password.
-func (c *Client) ExchangeToken(ctx context.Context) error {
+func (c *Client) ExchangeToken(ctx context.Context) error { return c.ExchangeLogin(ctx, true) }
+
+func (c *Client) ExchangeLogin(ctx context.Context, extended bool) error {
 	if err := c.lock(ctx); err != nil {
 		return err
 	}
@@ -149,39 +151,60 @@ func (c *Client) ExchangeToken(ctx context.Context) error {
 	if c.document.Authentication.SessionToken == "" {
 		return &Error{Kind: AuthenticationRequired, Operation: "exchange_token"}
 	}
+	trustToken := c.document.Authentication.TrustToken
+	if !extended {
+		trustToken = ""
+	}
 	body, _ := json.Marshal(struct {
 		Country  string `json:"accountCountryCode"`
 		Token    string `json:"dsWebAuthToken"`
 		Extended bool   `json:"extended_login"`
 		Trust    string `json:"trustToken"`
-	}{c.document.Browser.CountryCode, c.document.Authentication.SessionToken, true, c.document.Authentication.TrustToken})
-	return c.accountCallLocked(ctx, "exchange_token", "accountLogin", body, true)
+	}{c.document.Browser.CountryCode, c.document.Authentication.SessionToken, extended, trustToken})
+	if err := c.accountCallLocked(ctx, "exchange_token", "accountLogin", body, true, !extended); err != nil || extended {
+		return err
+	}
+	// Confirm a session-only exchange with Apple using the resulting cookies.
+	err := c.accountCallLocked(ctx, "validate", "validate", []byte("null"), false, true)
+	if failure, ok := err.(*Error); ok && failure.Kind != SecondFactorRequired && failure.Kind != AuthenticationRequired && failure.Kind != AppleRejected {
+		// The exchange already reached Apple. A failed confirmation read
+		// cannot establish that the exchange was rejected or never sent.
+		observation := *failure
+		observation.Operation = "exchange_token"
+		observation.Unknown = true
+		return &observation
+	}
+	return err
 }
 
 // Validate checks the existing web cookies. Authentication failure is returned
 // as a fact; it never triggers login, OTP delivery or a business mutation.
 func (c *Client) Validate(ctx context.Context) error {
-	return c.validate(ctx,"validate")
+	return c.validate(ctx, "validate")
 }
 
 // ValidateForMail validates the web session with the mail request headers.
 // Ordinary account validation uses its account request profile.
 func (c *Client) ValidateForMail(ctx context.Context) error {
-	return c.validate(ctx,"mail_validate")
+	return c.validate(ctx, "mail_validate")
 }
-func (c *Client) validate(ctx context.Context,operation string) error {
+func (c *Client) validate(ctx context.Context, operation string) error {
 	if err := c.lock(ctx); err != nil {
 		return err
 	}
 	defer c.unlock()
-	return c.accountCallLocked(ctx, operation, "validate", []byte("null"), false)
+	sessionOnly := c.document.Assurance.HSAVersion >= 1 && c.document.ValidatedAtUnixNano != nil && c.document.Principal.DSID != "" && !c.document.Assurance.TrustedBrowser && !c.document.Assurance.HSAChallengeRequired
+	return c.accountCallLocked(ctx, operation, "validate", []byte("null"), false, sessionOnly)
 }
 
-func (c *Client) accountCallLocked(ctx context.Context, operation, path string, body []byte, mutation bool) error {
+func (c *Client) accountCallLocked(ctx context.Context, operation, path string, body []byte, mutation, sessionOnly bool) error {
 	previous := c.cookieSnapshot(time.Now())
 	response, err := c.exchangeLocked(ctx, operation, http.MethodPost, setupOrigin(c.document.Principal.Region)+"/setup/ws/1/"+path, body, false, mutation)
 	if err == nil {
-		err = c.acceptAccount(operation, response)
+		err = c.acceptAccount(operation, response, sessionOnly)
+		if failure, ok := err.(*Error); ok && failure.Code == "PRINCIPAL_MISMATCH" && operation == "exchange_token" && c.document.Principal.DSID == "" {
+			err = c.confirmFirstAccount(ctx, response, failure, sessionOnly)
+		}
 	}
 	if err != nil {
 		diagnosed, ok := err.(*Error)
@@ -195,25 +218,93 @@ func (c *Client) accountCallLocked(ctx context.Context, operation, path string, 
 	return err
 }
 
+// Inspect a sparse accountLogin profile with one read using the exchange
+// cookies. Both profiles must name the same DSID before binding any session.
+func (c *Client) confirmFirstAccount(ctx context.Context, exchange exchangeResult, mismatch *Error, sessionOnly bool) error {
+	var first appleAccount
+	if json.Unmarshal(exchange.body, &first) != nil || len(first.Info.AppleIDEntries) > 0 || first.needsChallenge(sessionOnly) {
+		return mismatch
+	}
+	verified, err := c.exchangeLocked(ctx, "validate", http.MethodPost, setupOrigin(c.document.Principal.Region)+"/setup/ws/1/validate", []byte("null"), false, false)
+	if err != nil {
+		return err
+	}
+	if err = diagnose("validate", verified, false); err != nil {
+		return err
+	}
+	var profile appleAccount
+	if json.Unmarshal(verified.body, &profile) != nil || profile.Info.DSID != first.Info.DSID ||
+		first.Info.AppleID != "" && profile.Info.AppleID != "" && !strings.EqualFold(first.Info.AppleID, profile.Info.AppleID) {
+		return mismatch
+	}
+	return c.acceptAccount("exchange_token", verified, sessionOnly)
+}
+
 type appleAccount struct {
 	Success *bool `json:"success"`
 	Info    struct {
-		DSID         decimalID `json:"dsid"`
-		AppleID      string    `json:"appleId"`
-		PrimaryEmail string    `json:"primaryEmail"`
-		CountryCode  string    `json:"countryCode"`
-		HSAVersion   int       `json:"hsaVersion"`
-		HMEActive    bool      `json:"isHideMyEmailSubscriptionActive"`
-		HMEAvailable bool      `json:"isHideMyEmailFeatureAvailable"`
+		DSID           decimalID `json:"dsid"`
+		AppleID        string    `json:"appleId"`
+		AppleIDAlias   string    `json:"appleIdAlias"`
+		AppleIDAliases []string  `json:"appleIdAliases"`
+		ICloudAlias    string    `json:"iCloudAppleIdAlias"`
+		AppleIDEntries []struct {
+			Type  string `json:"type"`
+			Value string `json:"value"`
+		} `json:"appleIdEntries"`
+		PrimaryEmail         string `json:"primaryEmail"`
+		PrimaryEmailVerified bool   `json:"primaryEmailVerified"`
+		CountryCode          string `json:"countryCode"`
+		HSAVersion           int    `json:"hsaVersion"`
+		HMEActive            bool   `json:"isHideMyEmailSubscriptionActive"`
+		HMEAvailable         bool   `json:"isHideMyEmailFeatureAvailable"`
 	} `json:"dsInfo"`
 	Services map[string]struct {
 		URL string `json:"url"`
 	} `json:"webservices"`
-	ChallengeRequired bool `json:"hsaChallengeRequired"`
-	TrustedBrowser    bool `json:"hsaTrustedBrowser"`
+	ChallengeRequired *bool `json:"hsaChallengeRequired"`
+	TrustedBrowser    bool  `json:"hsaTrustedBrowser"`
 }
 
-func (c *Client) acceptAccount(operation string, response exchangeResult) error {
+func (account appleAccount) matchesPrincipal(principal Principal) bool {
+	if principal.DSID != "" {
+		return principal.DSID == string(account.Info.DSID)
+	}
+	// On first binding only compare identities asserted by regional setup.
+	// A receiving mailbox, IMAP username or unverified contact is insufficient.
+	matches := func(value string) bool {
+		return value != "" && strings.EqualFold(value, principal.AppleID)
+	}
+	if matches(account.Info.AppleID) || matches(account.Info.AppleIDAlias) || matches(account.Info.ICloudAlias) ||
+		account.Info.PrimaryEmailVerified && matches(account.Info.PrimaryEmail) {
+		return true
+	}
+	for _, entry := range account.Info.AppleIDEntries {
+		if strings.EqualFold(entry.Type, "email") && matches(entry.Value) {
+			return true
+		}
+	}
+	for _, alias := range account.Info.AppleIDAliases {
+		if matches(alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func (account appleAccount) needsChallenge(sessionOnly bool) bool {
+	if account.ChallengeRequired != nil && *account.ChallengeRequired {
+		return true
+	}
+	// An untrusted login needs an explicit response about the current challenge.
+	// Absence of a trust grant alone does not answer that question.
+	if sessionOnly && !account.TrustedBrowser {
+		return account.ChallengeRequired == nil
+	}
+	return account.Info.HSAVersion >= 1 && !account.TrustedBrowser
+}
+
+func (c *Client) acceptAccount(operation string, response exchangeResult, sessionOnly bool) error {
 	mutation := operation == "exchange_token"
 	if err := diagnose(operation, response, mutation); err != nil {
 		return err
@@ -222,7 +313,6 @@ func (c *Client) acceptAccount(operation string, response exchangeResult) error 
 	if json.Unmarshal(response.body, &account) != nil || (account.Success != nil && !*account.Success) || account.Info.DSID == "" {
 		return &Error{Kind: MalformedResponse, Operation: operation, Status: response.status, Unknown: mutation}
 	}
-	current := c.document.Principal
 	dsid := string(account.Info.DSID)
 	for _, digit := range dsid {
 		if digit < '0' || digit > '9' {
@@ -231,14 +321,14 @@ func (c *Client) acceptAccount(operation string, response exchangeResult) error 
 	}
 	// A known DSID remains authoritative across Apple's username aliases. On
 	// first binding, the response must identify the requested login principal.
-	if (current.DSID != "" && current.DSID != dsid) || (current.DSID == "" && !strings.EqualFold(current.AppleID, account.Info.AppleID)) {
+	if !account.matchesPrincipal(c.document.Principal) {
 		return &Error{Kind: AuthenticationRequired, Operation: operation, Status: response.status, Code: "PRINCIPAL_MISMATCH", Unknown: mutation}
 	}
 	next := cloneSession(c.document)
 	next.Principal.DSID = dsid
 	next.Principal.PrimaryEmail = account.Info.PrimaryEmail
 	next.Browser.CountryCode = account.Info.CountryCode
-	next.Assurance = Assurance{HSAVersion: account.Info.HSAVersion, HSAChallengeRequired: account.ChallengeRequired, TrustedBrowser: account.TrustedBrowser, HideMyEmailActive: account.Info.HMEActive, HideMyEmailAvailable: account.Info.HMEAvailable}
+	next.Assurance = Assurance{HSAVersion: account.Info.HSAVersion, HSAChallengeRequired: account.needsChallenge(sessionOnly), TrustedBrowser: account.TrustedBrowser, HideMyEmailActive: account.Info.HMEActive, HideMyEmailAvailable: account.Info.HMEAvailable}
 	for _, entry := range []struct {
 		key         string
 		role        Service
@@ -256,7 +346,7 @@ func (c *Client) acceptAccount(operation string, response exchangeResult) error 
 		return &Error{Kind: MalformedResponse, Operation: operation, Status: response.status, Unknown: mutation}
 	}
 	c.document = next
-	if account.ChallengeRequired || (account.Info.HSAVersion >= 1 && !account.TrustedBrowser) {
+	if next.Assurance.HSAChallengeRequired {
 		return &Error{Kind: SecondFactorRequired, Operation: operation, Status: response.status}
 	}
 	return nil

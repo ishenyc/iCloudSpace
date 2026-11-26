@@ -33,6 +33,7 @@ const (
 	RateLimited            ErrorKind = "rate_limited"
 	AppleRejected          ErrorKind = "apple_rejected"
 	SecondFactorRequired   ErrorKind = "second_factor_required"
+	ChallengeUnavailable   ErrorKind = "challenge_method_unavailable"
 )
 
 // Error retains safe diagnostics only: no upstream response text, URL, cookies,

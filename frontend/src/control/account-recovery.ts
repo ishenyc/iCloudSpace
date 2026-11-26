@@ -2,6 +2,7 @@ import { decodeIdentifier } from './contracts.ts'
 import { credentialKey } from './credential-contracts.ts'
 import { hmeKey } from './hme-contracts.ts'
 import { providerAction, providerRequestKey } from './provider-session-contracts.ts'
+import type { ProviderAuthResult } from './provider-session-contracts.ts'
 import type { ProviderAction } from './provider-session-contracts.ts'
 import { ClientStateError, clientStateControlBase } from './client-state-handoff.ts'
 import type { ClientStateStorage, PreservedClientState } from './client-state-handoff.ts'
@@ -20,7 +21,7 @@ export interface AccountRecoverySnapshot {
   readonly preserved: readonly PreservedClientState[]
 }
 
-const providerActions: readonly ProviderAction[] = ['login', 'load_challenge', 'send_device_code', 'verify_device_code', 'send_sms', 'verify_sms', 'verify_security_key', 'trust_browser', 'exchange_token', 'validate_session', 'restore_session', 'clear_authentication']
+const providerActions: readonly ProviderAction[] = ['login', 'load_challenge', 'send_device_code', 'verify_device_code', 'send_sms', 'verify_sms', 'verify_security_key', 'trust_browser', 'decline_trust', 'exchange_token', 'validate_session', 'restore_session', 'clear_authentication']
 const slots = ['hme', 'ack', 'complete', ...providerActions.flatMap(action => ['provider:' + action + ':0', 'provider:' + action + ':1'])]
 function recordSlots(value: AccountRecoveryInput): string[] { return value.kind === 'provider' ? ['provider:' + value.action + ':0', 'provider:' + value.action + ':1'] : [value.kind] }
 function object(value: unknown): Record<string, unknown> {
@@ -120,6 +121,18 @@ export class AccountRecoveryStore {
     } catch (e) { throw e instanceof ClientStateError ? e : new ClientStateError('account_recovery_write_denied') }
   }
   /** Remove only the exact original reference after its query proves settlement. */
+  archiveExpiredProvider(value: AccountRecovery, result: ProviderAuthResult): void {
+    if (value.kind !== 'provider' || value.operator_id !== this.operatorID || value.control_base !== this.controlBase ||
+        result.state !== 'expired' || !result.durable || result.receipt?.request_key !== value.request_key ||
+        result.receipt.action !== value.action || result.session?.source_id !== value.source_id) throw new ClientStateError('account_recovery_conflict')
+    // Keep each receipt under its own key. Two tabs archiving distinct attempts
+    // cannot overwrite one another. Never copy the provider challenge token.
+    const key = this.key(value.source_id,'expired-provider:' + value.request_key)
+    const saved = JSON.stringify({reference:this.record(value), receipt:result.receipt})
+    this.storage.setItem(key,saved)
+    if (this.storage.getItem(key) !== saved) throw new ClientStateError('account_recovery_conflict')
+    this.forget(value)
+  }
   forget(value: AccountRecovery): void {
     const supplied = object(value)
     if (supplied.version !== 1 || supplied.control_base !== this.controlBase || supplied.operator_id !== this.operatorID) throw new ClientStateError('account_recovery_scope')

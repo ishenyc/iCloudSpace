@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -267,16 +268,20 @@ func (a *ManagementHME) reconcile(w http.ResponseWriter, r *http.Request) {
 	defer close()
 	provider := a.provider(source)
 	if provider == nil {
-		writeAddressError(w, r, addresses.ErrProvider, nil)
+		writeDirectoryReadError(w, r, addresses.ErrProvider)
 		return
 	}
 	directory, err := provider.Directory(r.Context())
 	if err != nil {
-		writeAddressError(w, r, errors.Join(addresses.ErrProvider, err), nil)
+		writeDirectoryReadError(w, r, err)
 		return
 	}
 	result, err := a.addresses.ReconcileDirectory(r.Context(), source, revision, directory, managementOwner(r), input.Profile)
 	if err != nil {
+		if errors.Is(err, addresses.ErrDirectory) && !errors.Is(err, addresses.ErrCommitUnknown) {
+			writeDirectoryReadError(w, r, err)
+			return
+		}
 		writeAddressError(w, r, err, nil)
 		return
 	}
@@ -291,4 +296,27 @@ func (a *ManagementHME) reconcile(w http.ResponseWriter, r *http.Request) {
 		Conflicts      int `json:"conflicts"`
 		Pending        int `json:"pending"`
 	}{result.Imported, result.Existing, result.Archived, result.Rediscovered, result.Active, result.Inactive, result.SkippedForward, result.Conflicts, result.Pending})
+}
+
+// This endpoint has not submitted a directory import when its provider read
+// fails. Uncertain database commits use the separate address error path.
+func writeDirectoryReadError(w http.ResponseWriter, r *http.Request, err error) {
+	status := http.StatusBadGateway
+	problem := Problem{Kind: "provider", Code: "HME_DIRECTORY_READ_FAILED", Message: "The Apple directory could not be read. No addresses were reconciled.", Outcome: NotSent}
+	var remote *apple.Error
+	var persist *providersession.PersistenceError
+	errors.As(err, &remote)
+	switch {
+	case errors.As(err, &persist):
+		status, problem.Code, problem.Message = http.StatusServiceUnavailable, "HME_DIRECTORY_SESSION_CHECKPOINT", "The provider session checkpoint could not be confirmed. No addresses were reconciled."
+	case errors.Is(err, providersession.ErrLoginRequired) || remote != nil && (remote.Kind == apple.AuthenticationRequired || remote.Kind == apple.SecondFactorRequired):
+		status, problem.Code, problem.Message = http.StatusConflict, "HME_LOGIN_REQUIRED", "Sign in to Apple to read the directory."
+	case errors.Is(err, context.DeadlineExceeded) || remote != nil && remote.Kind == apple.Timeout:
+		status, problem.Code, problem.Message = http.StatusGatewayTimeout, "HME_DIRECTORY_READ_TIMEOUT", "The Apple directory read timed out before reconciliation."
+	case remote != nil && remote.Kind == apple.RateLimited:
+		status, problem.Code, problem.Message = http.StatusTooManyRequests, "HME_DIRECTORY_RATE_LIMITED", "Apple rate-limited the directory read before reconciliation."
+	case errors.Is(err, addresses.ErrDirectory) || remote != nil && (remote.Kind == apple.ResponseBudget || remote.Kind == apple.MalformedResponse):
+		problem.Code, problem.Message = "DIRECTORY_INCOMPLETE", "The returned Apple directory could not be verified. No addresses were reconciled."
+	}
+	WriteProblem(w, status, currentMeta(w), problem)
 }

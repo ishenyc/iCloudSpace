@@ -159,8 +159,8 @@ export function RuntimeLogDialog({ log, onClose }: { log: Log | null; onClose: (
       <div className="detail-grid"><div><small className="text-muted">主号</small><div>{log.source_id ? <Link className="text-link" to={'/accounts/' + log.source_id}>主号 #{log.source_id}</Link> : '系统'}</div></div><div><small className="text-muted">{runId ? '流程编号' : '请求编号'}</small><div className="mono" style={{ overflowWrap: 'anywhere' }}>{runId || log.fields.request_id || '-'}</div></div></div>
       {runId ? <>
         {flow.loading && !flow.manualRefreshing && <Loading label="正在加载当前窗口中的流程记录…" />}
-        {flow.error && <><Alert error={flow.error} /><p className="text-muted">目前仅展示已取得的记录，不能据此推断任务的最终状态。</p><RefreshButton variant="outline" pending={flow.loading || flow.manualRefreshing} onRefresh={flow.refresh}>重新加载流程</RefreshButton></>}
-        {flow.data?.warning != null && <Alert error={flow.data.warning}>仅展示已取得的流程记录，请刷新后继续核对。</Alert>}
+        {flow.error && <><Alert context="read" error={flow.error} /><p className="text-muted">目前仅展示已取得的记录，不能据此推断任务的最终状态。</p><RefreshButton variant="outline" pending={flow.loading || flow.manualRefreshing} onRefresh={flow.refresh}>重新加载流程</RefreshButton></>}
+        {flow.data?.warning != null && <Alert context="read" error={flow.data.warning}>仅展示已取得的流程记录，请刷新后继续核对。</Alert>}
         <RefreshRegion loading={flow.manualRefreshing} label="正在刷新流程记录…"><div className="stack">
           {!flow.loading && !flow.error && partial && <Alert tone="warning">当前流程记录不完整，较早记录可能已被保留窗口覆盖。任务结果以主号状态和操作记录为准。</Alert>}
           {!flow.loading && !flow.error && !ordered.some(entry => terminal(entry)) && <Alert tone="info">当前窗口尚无本轮结束记录；某次尝试失败不代表本轮最终失败。刷新流程查看后续状态。</Alert>}
@@ -168,8 +168,7 @@ export function RuntimeLogDialog({ log, onClose }: { log: Log | null; onClose: (
             <div className="toolbar"><Badge tone={tone(entry.level)}>{stageLabel(entry)}</Badge><time className="text-muted">{time(entry.occurred_at)}</time>{entry.synchronization && <span className="text-muted">第 {entry.synchronization.segments} 批 · {entry.synchronization.trigger === 'automatic' ? '自动同步' : entry.synchronization.trigger === 'manual' ? '手动同步' : '公开读取触发'}</span>}</div>
             <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{runtimeMessage(entry)}</p>
             <p className="text-muted mono">{sourceLabel(entry)}{entry.fields.request_id ? ' · ' + entry.fields.request_id : ''}</p>
-            {entry.error_code && <Alert tone="danger">诊断码：{entry.error_code}</Alert>}
-            {diagnosticPairs(entry).length > 0 && <dl className="detail-grid">{diagnosticPairs(entry).map(pair => <div key={pair.label}><dt className="text-muted">{pair.label}</dt><dd style={{ margin: 0, overflowWrap: 'anywhere' }}>{pair.value}</dd></div>)}</dl>}
+            {diagnosticPairs(entry).length > 0 && <details><summary className="text-link">查看诊断详情</summary><dl className="detail-grid">{diagnosticPairs(entry).map(pair => <div key={pair.label}><dt className="text-muted">{pair.label}</dt><dd style={{ margin: 0, overflowWrap: 'anywhere' }}>{pair.value}</dd></div>)}</dl></details>}
             {entry.synchronization && <details><summary className="text-link">步骤上下文</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(entry.synchronization, null, 2)}</pre></details>}
           </li>)}</ol>
         </div></RefreshRegion>
@@ -265,8 +264,8 @@ function RuntimeLogs() {
       </form>
     </Panel>
     {generationNotice && <Alert tone="info">服务进程已变化，已切换到新的日志窗口。</Alert>}
-    {accounts.error && <Alert error={accounts.error}>主号选项加载失败，仍可使用当前主号筛选。</Alert>}
-    {logs.error && <Alert error={logs.error} />}
+    {accounts.error && <Alert context="read" error={accounts.error}>主号选项加载失败，仍可使用当前主号筛选。</Alert>}
+    {logs.error && <Alert context="read" error={logs.error} />}
     <TableTransition dataKey={logs.dataKey} stale={logs.stale} pending={logs.loading} refreshing={logs.refreshing} manualRefreshing={logs.manualRefreshing} initialLoadingVisible={logs.initialLoadingVisible} label="正在更新运行日志">
       {rows.length ? <LogTable rows={rows} columns={columns} loading={logs.loading} /> : <TablePlaceholder columns={columns} loading={logs.loading} rowHeight={60} label="正在加载日志" title={logs.error ? '日志暂不可用' : '暂无匹配日志'} description="调整筛选条件，或等待新的运行记录。" action={<RefreshButton variant="secondary" pending={logs.loading || logs.manualRefreshing} onRefresh={refreshLatest}>重新加载</RefreshButton>} />}
     </TableTransition>
@@ -313,7 +312,7 @@ function AuditLogs() {
   ]
   return <div className="stack">
     <Panel title="操作记录" description="持久保存的后台登录、配置变更与敏感导出记录。导出授权和材料准备不代表客户端已收到文件；记录不包含密码、完整 Key 或邮件内容。" actions={<RefreshButton variant="outline" pending={logs.loading || logs.manualRefreshing} onRefresh={logs.refresh}>刷新</RefreshButton>}>{null}</Panel>
-    {logs.error && <Alert error={logs.error} />}
+    {logs.error && <Alert context="read" error={logs.error} />}
     {logs.data?.changed && <Alert tone="info">读取期间操作记录发生变化，当前结果已去重。请刷新核对最新记录。</Alert>}
     <TableTransition dataKey={logs.dataKey} stale={logs.stale} pending={logs.loading} refreshing={logs.refreshing} manualRefreshing={logs.manualRefreshing} initialLoadingVisible={logs.initialLoadingVisible} label="正在更新操作记录">
       {rows.length ? <LogTable rows={rows} columns={columns} loading={logs.loading} /> : <TablePlaceholder columns={columns} loading={logs.loading} rowHeight={60} label="正在加载操作记录" title={logs.error ? '操作记录暂不可用' : '暂无操作记录'} description="新的登录和配置操作会显示在这里。" action={logs.error ? <RefreshButton variant="secondary" pending={logs.loading || logs.manualRefreshing} onRefresh={logs.refresh}>重新加载</RefreshButton> : undefined} />}

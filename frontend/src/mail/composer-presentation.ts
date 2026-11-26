@@ -25,6 +25,9 @@ export function composerResult(state: CompositionSnapshot) {
     title: '正在发送邮件', tone: 'neutral' as const,
     detail: '正在准备并提交这封邮件。首次联系收件人时可能需要稍等，请勿重复发送。',
   }
+  if (state.pending === 'query' && !state.submission) return {
+    title: '正在查询上次发送', tone: 'neutral' as const, detail: '正在读取原发送记录。',
+  }
   if (state.recoveryBlocked) return {
     title: '需要恢复上次操作', tone: 'warning' as const,
     detail: '浏览器无法完整读取上次操作记录。请先核对原结果，避免重复发送。',
@@ -42,8 +45,8 @@ export function composerResult(state: CompositionSnapshot) {
     detail: feedback!.text,
   }
   return {
-    title: state.pending === 'query' && !state.submission ? '正在查询上次发送' : '发送结果待确认',
+    title: '发送结果待确认',
     tone: 'warning' as const,
-    detail: feedback?.text || '正在读取原发送结果，查询不会重新发送邮件。',
+    detail: feedback?.text || '请查询原发送记录，核对这封邮件的结果。',
   }
 }

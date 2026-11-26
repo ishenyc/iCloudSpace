@@ -121,7 +121,7 @@ func allowedRequest(u *url.URL, region Region) bool {
 	}
 	if u.Host == "idmsa.apple.com" {
 		switch u.Path {
-		case "/appleauth/auth", "/appleauth/auth/authorize/signin", "/appleauth/auth/signin/init", "/appleauth/auth/signin/complete", "/appleauth/auth/verify/trusteddevice", "/appleauth/auth/verify/trusteddevice/securitycode", "/appleauth/auth/verify/phone", "/appleauth/auth/verify/phone/securitycode", "/appleauth/auth/verify/security/key", "/appleauth/auth/2sv/trust":
+		case "/appleauth/auth", "/appleauth/auth/authorize/signin", "/appleauth/auth/signin/init", "/appleauth/auth/signin/complete", "/appleauth/auth/verify/trusteddevice", "/appleauth/auth/verify/trusteddevice/securitycode", "/appleauth/auth/verify/phone", "/appleauth/auth/verify/phone/securitycode", "/appleauth/auth/verify/security/key", "/appleauth/auth/2sv/trust", "/appleauth/auth/2sv/donttrust":
 			return true
 		}
 		return false

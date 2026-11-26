@@ -57,6 +57,7 @@ export function SecurityPage() {
   const [recovery, setRecovery] = useState<RotationRecovery>(() => readPendingRotations(storagePrefix, previousPrefix))
   const [recoveryError, setRecoveryError] = useState<unknown>(null)
   const [recoveryNotice, setRecoveryNotice] = useState('')
+  const [recoveryTone, setRecoveryTone] = useState<'info'|'success'|'warning'>('info')
   const recoveryReady = recovery.prefix === storagePrefix
   const pending = recoveryReady ? recovery.pending : []
   const rotationBlocked = !recoveryReady || recovery.error !== null || pending.length > 0
@@ -149,11 +150,11 @@ export function SecurityPage() {
       const result = (await credentials.queryRotation(original.operation_key)).result
       matchRotation(result, original)
       if (result.state === 'prepared') {
-        setRecoveryNotice('原操作尚未完成或取消，仍需核对。请保留原引用，勿再次发起轮换。')
+        setRecoveryTone('warning'); setRecoveryNotice('原操作尚未完成或取消，仍需核对。请保留原引用，勿再次发起轮换。')
         return
       }
       if (removePending(original)) {
-        setRecoveryNotice(result.state === 'committed' ? `已确认原操作完成，轮换了 ${result.items.length} 个符合条件的地址。当前新登录会话不受这次只读查询影响。` : '已确认原操作已取消，未按该操作继续轮换。再次操作需要读取并确认新的范围。')
+        setRecoveryTone(result.state === 'committed' ? 'success' : 'info'); setRecoveryNotice(result.state === 'committed' ? `已确认原操作完成，轮换了 ${result.items.length} 个符合条件的地址。当前新登录会话不受这次只读查询影响。` : '已确认原操作已取消，未按该操作继续轮换。再次操作需要读取并确认新的范围。')
       }
     } catch (error) {
       setRecoveryError(error instanceof HttpError && error.status === 404
@@ -228,7 +229,7 @@ export function SecurityPage() {
       // the uncertain session; a later login can only query this same key.
       setRotationOpen(false)
       setRotationScope(null)
-      setRecoveryNotice('轮换结果尚未确认，原操作引用已保存。重新登录后请查询原操作，勿再次提交。')
+      setRecoveryTone('warning'); setRecoveryNotice('轮换结果尚未确认，原操作引用已保存。重新登录后请查询原操作，勿再次提交。')
       setRecoveryError(error instanceof ControlError ? error : new Error('轮换回执未能确认，原操作引用已保留。'))
     } finally {
       actionLock.current = false
@@ -256,8 +257,8 @@ export function SecurityPage() {
           <p className="text-muted">执行后需要重新登录。新凭据不会自动加载或保存，请在可信环境中按需获取。</p>
           {recovery.error && <Alert error={recovery.error} />}
           {recoveryError != null && <Alert error={recoveryError} attention="focus" />}
-          {recoveryNotice && <Alert tone="warning">{recoveryNotice}</Alert>}
-          {pending.length > 0 && <Alert tone="warning"><div className="stack">
+          {recoveryNotice && <Alert tone={recoveryTone}>{recoveryNotice}</Alert>}
+          {pending.length > 0 && !(rotationOpen && rotationBusy && !rotationQueryKey) && <Alert tone="warning"><div className="stack">
             <span>本入口有 {pending.length} 笔待核对的原操作。确认结果前无法再发起全量轮换。</span>
             {pending.map(original=><div key={original.storage_key||original.operation_key}><details className="operation-details"><summary>查看原操作编号</summary><code>{original.operation_key}</code></details>
             <div><Button type="button" variant="outline" disabled={passwordBusy || rotationBusy || auth.checking || !auth.session} loading={rotationBusy && rotationQueryKey === original.operation_key} loadingLabel="正在查询…" onClick={()=>void queryOriginalRotation(original)}>查询原操作</Button></div></div>)}

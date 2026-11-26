@@ -32,9 +32,13 @@ func managementWorkflowSchemas() openObject {
 	documentText["contentSchema"] = openRef("MAppleSessionDocument")
 	documentText["x-maxUtf8Bytes"] = 1048576
 	var actionBranches []any
-	for _, action := range []string{"load_challenge", "send_device_code", "verify_device_code", "send_sms", "verify_sms", "verify_security_key", "trust_browser", "exchange_token", "validate_session"} {
+	for _, action := range []string{"load_challenge", "send_device_code", "verify_device_code", "send_sms", "verify_sms", "verify_security_key", "trust_browser", "decline_trust", "exchange_token", "validate_session"} {
 		properties := openObject{"request_key": key, "challenge_token": token, "action": openObject{"const": action}, "code": str, "phone_id": str, "mode": openObject{"type": "string", "enum": []string{"sms", "voice"}}, "assertion": openRef("MAppleSecurityKeyAssertion")}
 		required := []string{"request_key", "challenge_token", "action"}
+		if action == "trust_browser" {
+			properties["confirm_browser_trust"] = openObject{"type": "boolean", "const": true}
+			required = append(required, "confirm_browser_trust")
+		}
 		if action == "verify_device_code" || action == "verify_sms" {
 			properties["code"] = openObject{"type": "string", "pattern": "^[0-9]{6}$"}
 			required = append(required, "code")

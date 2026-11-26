@@ -50,9 +50,15 @@ func (c *Client) RequestDeviceCode(ctx context.Context) error {
 	if !c.challengeReady() || !c.document.AuthFlow.Options.TrustedDevice {
 		return &Error{Kind: AuthenticationRequired, Operation: "send_device_code"}
 	}
-	response, err := c.exchangeLocked(ctx, "send_device_code", http.MethodPut, c.challengeEndpoint("/verify/trusteddevice/securitycode"), nil, true, true)
+	response, err := c.exchangeLocked(ctx, "send_device_code", http.MethodPut, authOrigin+"/verify/trusteddevice/securitycode", nil, true, true)
 	if err != nil {
 		return err
+	}
+	// Apple's deviceCode/send widget accepts HTTP 200 and 202. The JSON on
+	// those statuses describes the challenge, not a verification verdict.
+	// This acknowledges dispatch only. Code verification is a separate POST.
+	if response.status == http.StatusOK || response.status == http.StatusAccepted {
+		return nil
 	}
 	return diagnose("send_device_code", response, true)
 }
@@ -72,14 +78,23 @@ func (c *Client) VerifyTrustedDeviceCode(ctx context.Context, code string) error
 	if err != nil {
 		return err
 	}
-	if response.status == http.StatusConflict {
-		var verdict struct {
-			SecurityCode struct {
-				Valid *bool `json:"valid"`
-			} `json:"securityCode"`
+	return deviceCodeVerdict(response)
+}
+
+func deviceCodeVerdict(response exchangeResult) error {
+	var verdict struct {
+		SecurityCode struct {
+			Valid *bool `json:"valid"`
+		} `json:"securityCode"`
+	}
+	if json.Unmarshal(response.body, &verdict) == nil && verdict.SecurityCode.Valid != nil {
+		if !*verdict.SecurityCode.Valid {
+			return &Error{Kind: AppleRejected, Operation: "verify_device_code", Status: response.status, Code: responseCode(response.body)}
 		}
-		if json.Unmarshal(response.body, &verdict) == nil && verdict.SecurityCode.Valid != nil && *verdict.SecurityCode.Valid {
-			return nil
+		if response.status == http.StatusConflict {
+			// Apple's device verifier can acknowledge a valid code with 409.
+			// Still check business errors before proceeding to browser trust.
+			response.status = http.StatusOK
 		}
 	}
 	return diagnose("verify_device_code", response, true)
@@ -130,7 +145,7 @@ func (c *Client) RequestPhoneCode(ctx context.Context, id, mode string) error {
 		return invalid("send_phone_code")
 	}
 	body, _ := json.Marshal(map[string]any{"phoneNumber": phone, "mode": mode})
-	response, err := c.exchangeLocked(ctx, "send_phone_code", http.MethodPut, c.challengeEndpoint("/verify/phone"), body, true, true)
+	response, err := c.exchangeLocked(ctx, "send_phone_code", http.MethodPut, authOrigin+"/verify/phone", body, true, true)
 	if err != nil {
 		return err
 	}

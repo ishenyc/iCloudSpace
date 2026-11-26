@@ -165,10 +165,10 @@ func (c *Client) exchangeModeLocked(ctx context.Context, operation, method, endp
 		(auth && u.Host != "idmsa.apple.com") || (method != http.MethodGet && method != http.MethodPost && method != http.MethodPut) {
 		return exchangeResult{}, invalid(operation)
 	}
-	if shell && (!auth || mutation || method != http.MethodGet || u.Host != "idmsa.apple.com" || u.Path != "/appleauth/auth/authorize/signin") {
+	if shell && (!auth || mutation || method != http.MethodGet || u.Host != "idmsa.apple.com" || (u.Path != "/appleauth/auth/authorize/signin" && u.Path != "/appleauth/auth")) {
 		return exchangeResult{}, invalid(operation)
 	}
-	trustRequest := mutation && method == http.MethodGet && u.Host == "idmsa.apple.com" && u.Path == "/appleauth/auth/2sv/trust"
+	trustRequest := mutation && method == http.MethodGet && u.Host == "idmsa.apple.com" && (u.Path == "/appleauth/auth/2sv/trust" || u.Path == "/appleauth/auth/2sv/donttrust")
 	deviceCodeRequest := mutation && auth && method == http.MethodPut && len(body) == 0 && u.Host == "idmsa.apple.com" && u.Path == "/appleauth/auth/verify/trusteddevice/securitycode"
 	if mutation && !trustRequest && !deviceCodeRequest && (method == http.MethodGet || len(body) == 0) {
 		return exchangeResult{}, invalid(operation)

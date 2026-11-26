@@ -11,6 +11,8 @@ import (
 	"errors"
 	"io"
 	"math"
+	"strconv"
+	"strings"
 
 	"icloudspace/internal/provider/apple"
 	"icloudspace/internal/sourceguard"
@@ -193,6 +195,11 @@ func options(document apple.SessionDocument) *apple.AuthOptions {
 func (s *Service) result(src source, c challenge, key string) AuthResult {
 	r, _ := receipt(c, key)
 	out := AuthResult{RequestKey: key, ChallengeToken: c.Document.Token, ChallengeRevision: c.Revision, State: c.State, Session: src.Info, Receipt: r, RequestSessionRevision: c.SessionRevision}
+	if parts := strings.SplitN(r.ErrorCode, ":", 3); len(parts) == 3 {
+		out.Receipt.ErrorCode = parts[0]
+		out.ProviderStatus, _ = strconv.Atoi(parts[1])
+		out.ProviderCode = parts[2]
+	}
 	if document, err := s.document(src, false); err == nil {
 		if c.SessionRevision == src.Info.Revision {
 			out.Options = options(document)
@@ -215,26 +222,55 @@ func (s *Service) result(src source, c challenge, key string) AuthResult {
 	}
 	if len(c.Document.Receipts) > 0 {
 		last := c.Document.Receipts[len(c.Document.Receipts)-1]
+		if last.Prepared || last.Outcome == Unknown {
+			return out
+		}
 		switch last.Action {
 		case Login:
 			if last.ErrorCode == string(apple.SecondFactorRequired) {
-				out.NextAction = LoadChallenge
+				out.NextAction = factorAction(out.Options)
 			} else if last.Outcome == Accepted {
 				out.NextAction = ExchangeToken
 			}
 		case RestoreSession:
 			out.NextAction = ValidateSession
+		case LoadChallenge, SendDeviceCode, SendSMS:
+			out.NextAction = factorAction(out.Options)
+			if last.Action == SendSMS && out.Options != nil && out.Options.SMS {
+				out.NextAction = VerifySMS
+			}
 		case VerifyDeviceCode, VerifySMS, VerifySecurityKey:
+			out.NextAction = factorAction(out.Options)
 			if last.Outcome == Accepted {
 				out.NextAction = TrustBrowser
 			}
-		case TrustBrowser:
+		case TrustBrowser, DeclineTrust:
+			out.NextAction = TrustBrowser
 			if last.Outcome == Accepted {
 				out.NextAction = ExchangeToken
+			}
+		case ExchangeToken, ValidateSession:
+			if last.ErrorCode == string(apple.SecondFactorRequired) {
+				out.NextAction = LoadChallenge
 			}
 		}
 	}
 	return out
+}
+
+func factorAction(options *apple.AuthOptions) Action {
+	switch {
+	case options == nil:
+		return LoadChallenge
+	case options.TrustedDevice:
+		return VerifyDeviceCode
+	case options.SMS && len(options.Phones) != 0:
+		return VerifySMS
+	case len(options.SecurityKeys) != 0:
+		return VerifySecurityKey
+	default:
+		return LoadChallenge
+	}
 }
 
 // Query is only a local receipt read. A prepared/unknown action remains query
@@ -377,7 +413,9 @@ func (s *Service) Start(ctx context.Context, id int64, actor Actor, key, passwor
 		loginErr := client.Login(ctx, password)
 		var failure *apple.Error
 		if errors.As(loginErr, &failure) && failure.Kind == apple.SecondFactorRequired {
-			_, _ = client.AuthorizeShell(ctx)
+			// Password acceptance remains a separate receipt. A failed options
+			// read leaves no usable factor and can be retried explicitly.
+			_, _ = client.LoadChallengeOptions(ctx)
 		}
 		return loginErr
 	})
@@ -426,7 +464,7 @@ func (s *Service) runAuth(ctx context.Context, gate *sourceguard.Lease, src sour
 		c.State = "mfa"
 	} else if authenticated {
 		c.State = "complete"
-	} else if action == Login && outcome == Rejected {
+	} else if (action == Login || action == ExchangeToken || action == ValidateSession) && outcome == Rejected {
 		c.State = "failed"
 	}
 	w, err := s.repo.encodeSession(src, snapshot, authenticated)
@@ -472,7 +510,7 @@ func (s *Service) Perform(ctx context.Context, in AuthInput) (AuthResult, error)
 		return AuthResult{}, ErrInvalid
 	}
 	switch in.Action {
-	case LoadChallenge, SendDeviceCode, TrustBrowser, ExchangeToken, ValidateSession:
+	case LoadChallenge, SendDeviceCode, TrustBrowser, DeclineTrust, ExchangeToken, ValidateSession:
 	case VerifyDeviceCode, VerifySMS:
 		if !sixDigits(in.Code) {
 			return AuthResult{}, ErrInvalid
@@ -530,6 +568,14 @@ func (s *Service) Perform(ctx context.Context, in AuthInput) (AuthResult, error)
 	if c.Attempts >= s.cfg.MaxChallengeAttempts || len(c.Document.Receipts) >= 24 {
 		return s.result(src, c, in.RequestKey), ErrAttempts
 	}
+	next := s.result(src, c, in.RequestKey).NextAction
+	choice := in.Action
+	if choice == DeclineTrust {
+		choice = TrustBrowser
+	}
+	if (choice == TrustBrowser || choice == ExchangeToken || next == TrustBrowser || next == ExchangeToken) && next != choice {
+		return AuthResult{}, ErrInvalid
+	}
 	if c.Revision == math.MaxInt64 {
 		return AuthResult{}, ErrStale
 	}
@@ -556,7 +602,7 @@ func (s *Service) Perform(ctx context.Context, in AuthInput) (AuthResult, error)
 	return s.runAuth(ctx, gate, prepared, c, in.Actor, in.RequestKey, in.Action, func(client *apple.Client) error {
 		switch in.Action {
 		case LoadChallenge:
-			_, e := client.AuthorizeShell(ctx)
+			_, e := client.LoadChallengeOptions(ctx)
 			return e
 		case SendDeviceCode:
 			return client.RequestDeviceCode(ctx)
@@ -568,10 +614,11 @@ func (s *Service) Perform(ctx context.Context, in AuthInput) (AuthResult, error)
 			return client.VerifyPhoneCode(ctx, in.PhoneID, in.Mode, in.Code)
 		case VerifySecurityKey:
 			return client.VerifySecurityKey(ctx, *in.Assertion)
-		case TrustBrowser:
-			return client.TrustSession(ctx)
+		case TrustBrowser, DeclineTrust:
+			return client.BrowserTrust(ctx, in.Action == TrustBrowser)
 		case ExchangeToken:
-			return client.ExchangeToken(ctx)
+			last := before.Document.Receipts[len(before.Document.Receipts)-1]
+			return client.ExchangeLogin(ctx, last.Action != DeclineTrust)
 		case ValidateSession:
 			return client.Validate(ctx)
 		}
