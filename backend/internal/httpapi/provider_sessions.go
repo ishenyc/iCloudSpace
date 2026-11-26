@@ -57,13 +57,15 @@ func presentProviderSession(info providersession.SessionInfo) providerSessionVie
 }
 
 type providerReceiptView struct {
-	Key        string                  `json:"request_key"`
-	Action     providersession.Action  `json:"action"`
-	Outcome    providersession.Outcome `json:"outcome"`
-	ErrorCode  string                  `json:"error_code"`
-	Prepared   bool                    `json:"prepared"`
-	StartedAt  string                  `json:"started_at"`
-	FinishedAt *string                 `json:"finished_at"`
+	Key          string                  `json:"request_key"`
+	Action       providersession.Action  `json:"action"`
+	Outcome      providersession.Outcome `json:"outcome"`
+	ErrorCode    string                  `json:"error_code"`
+	HTTPStatus   int                     `json:"http_status,omitempty"`
+	ProviderCode string                  `json:"provider_code,omitempty"`
+	Prepared     bool                    `json:"prepared"`
+	StartedAt    string                  `json:"started_at"`
+	FinishedAt   *string                 `json:"finished_at"`
 }
 type providerAuthView struct {
 	Key               string                 `json:"request_key"`
@@ -87,7 +89,10 @@ func presentProviderAuth(result providersession.AuthResult, durable bool) provid
 		view.Session = &session
 	}
 	if result.Receipt.RequestKey != "" {
-		view.Receipt = &providerReceiptView{result.Receipt.RequestKey, result.Receipt.Action, result.Receipt.Outcome, result.Receipt.ErrorCode, result.Receipt.Prepared, instant(result.Receipt.StartedAt), optionalInstant(result.Receipt.FinishedAt)}
+		view.Receipt = &providerReceiptView{Key: result.Receipt.RequestKey, Action: result.Receipt.Action,
+			Outcome: result.Receipt.Outcome, ErrorCode: result.Receipt.ErrorCode, HTTPStatus: result.ProviderStatus,
+			ProviderCode: result.ProviderCode, Prepared: result.Receipt.Prepared,
+			StartedAt: instant(result.Receipt.StartedAt), FinishedAt: optionalInstant(result.Receipt.FinishedAt)}
 	}
 	return view
 }
@@ -95,7 +100,7 @@ func (a *ManagementProviderSessions) fail(w http.ResponseWriter, r *http.Request
 	status, problem := 500, internalProblem()
 	switch {
 	case errors.Is(err, providersession.ErrInvalid):
-		status, problem = 400, Problem{Kind: "invalid_request", Code: "PROVIDER_INPUT_INVALID", Message: "Check the provider request and challenge."}
+		status, problem = 400, Problem{Kind: "invalid_request", Code: "PROVIDER_INPUT_INVALID", Message: "Check the provider request and challenge.", Outcome: NotSent}
 	case errors.Is(err, providersession.ErrNotFound):
 		status, problem = 404, Problem{Kind: "not_found", Code: "PROVIDER_REQUEST_NOT_FOUND", Message: "The source or original provider request is unavailable."}
 	case errors.Is(err, providersession.ErrStale), errors.Is(err, providersession.ErrBinding):
@@ -103,9 +108,9 @@ func (a *ManagementProviderSessions) fail(w http.ResponseWriter, r *http.Request
 	case errors.Is(err, providersession.ErrOwner):
 		status, problem = 403, Problem{Kind: "authorization", Code: "PROVIDER_OWNER_CHANGED", Message: "Sign in again before continuing this provider request."}
 	case errors.Is(err, providersession.ErrExpired):
-		status, problem = 410, Problem{Kind: "expiry", Code: "PROVIDER_CHALLENGE_EXPIRED", Message: "The provider challenge has expired."}
+		status, problem = 410, Problem{Kind: "expiry", Code: "PROVIDER_CHALLENGE_EXPIRED", Message: "The provider challenge has expired.", Outcome: NotSent}
 	case errors.Is(err, providersession.ErrAttempts):
-		status, problem = 429, Problem{Kind: "rate_limit", Code: "PROVIDER_ATTEMPTS_EXHAUSTED", Message: "The challenge attempt limit has been reached."}
+		status, problem = 429, Problem{Kind: "rate_limit", Code: "PROVIDER_ATTEMPTS_EXHAUSTED", Message: "The challenge attempt limit has been reached.", Outcome: NotSent}
 	case errors.Is(err, providersession.ErrLoginRequired):
 		status, problem = 409, Problem{Kind: "authentication", Code: "PROVIDER_LOGIN_REQUIRED", Message: "Sign in to the provider before this operation."}
 	case errors.Is(err, providersession.ErrReadOnly):
@@ -116,7 +121,7 @@ func (a *ManagementProviderSessions) fail(w http.ResponseWriter, r *http.Request
 	WriteProblem(w, status, currentMeta(w), problem)
 }
 func (a *ManagementProviderSessions) result(w http.ResponseWriter, r *http.Request, result providersession.AuthResult, err error) {
-	if result.RequestKey != "" && result.State != "" {
+	if result.RequestKey != "" && result.State != "" && result.Receipt.RequestKey != "" {
 		durable := !errors.Is(err, providersession.ErrUnknown)
 		var persistence *providersession.PersistenceError
 		if errors.As(err, &persistence) {
@@ -193,15 +198,20 @@ func (a *ManagementProviderSessions) login(w http.ResponseWriter, r *http.Reques
 }
 func (a *ManagementProviderSessions) action(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Key       string                      `json:"request_key"`
-		Token     string                      `json:"challenge_token"`
-		Action    providersession.Action      `json:"action"`
-		Code      string                      `json:"code"`
-		PhoneID   string                      `json:"phone_id"`
-		Mode      string                      `json:"mode"`
-		Assertion *apple.SecurityKeyAssertion `json:"assertion"`
+		Key          string                      `json:"request_key"`
+		Token        string                      `json:"challenge_token"`
+		Action       providersession.Action      `json:"action"`
+		ConfirmTrust bool                        `json:"confirm_browser_trust"`
+		Code         string                      `json:"code"`
+		PhoneID      string                      `json:"phone_id"`
+		Mode         string                      `json:"mode"`
+		Assertion    *apple.SecurityKeyAssertion `json:"assertion"`
 	}
 	if !addressBody(w, r, &input) {
+		return
+	}
+	if (input.Action == providersession.TrustBrowser) != input.ConfirmTrust {
+		WriteProblem(w, http.StatusBadRequest, currentMeta(w), Problem{Kind: "invalid_request", Code: "PROVIDER_TRUST_CHOICE_REQUIRED", Message: "Choose whether to trust this browser.", Outcome: NotSent})
 		return
 	}
 	r, id, actor, close, ok := a.enter(w, r)

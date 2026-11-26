@@ -1,3 +1,4 @@
+import { feedbackMessage } from '../lib/feedback'
 import { useEffect, useRef, useState } from 'react'
 import { LoaderCircle, RefreshCw } from 'lucide-react'
 import { Button, type ButtonProps } from './ui/button'
@@ -30,7 +31,7 @@ export function RefreshButton({ onRefresh, pending = false, loadingLabel = '刷�
     lock.current = true; setWorking(true)
     const started = performance.now()
     try { await onRefresh() }
-    catch (error: any) { if (mounted.current) toast(error?.message || '刷新失败，请重试。', 'error') }
+    catch (error: any) { if (mounted.current) toast(feedbackMessage(error, 'read'), 'error') }
     finally {
       if (mounted.current) timer.current = setTimeout(() => { lock.current = false; setWorking(false) }, Math.max(0, 300 - (performance.now() - started)))
       else lock.current = false

@@ -89,6 +89,11 @@ const controlMessages: Readonly<Record<string, string>> = {
   ADDRESS_LOCAL_CAPACITY: '主号的本地邮箱容量已满，请先核对已启用和待处理邮箱。',
   DIRECTORY_INCOMPLETE: '未能取得完整的 Apple 目录，本次不据此归档邮箱。请查看同步诊断。',
   ADDRESS_PROVIDER_UNAVAILABLE: '邮箱服务未能完成操作，请查看原请求结果和同步诊断。',
+  HME_DIRECTORY_READ_FAILED: '读取 Apple 隐私邮箱目录失败，本次未变更本地邮箱。可稍后再同步。',
+  HME_DIRECTORY_READ_TIMEOUT: '读取 Apple 隐私邮箱目录超时，本次未变更本地邮箱。可稍后再同步。',
+  HME_DIRECTORY_RATE_LIMITED: 'Apple 暂时限制了目录读取，请稍后再同步。本次未变更本地邮箱。',
+  HME_DIRECTORY_SESSION_CHECKPOINT: 'Apple 会话保存结果待核对，本次未变更本地邮箱。请查看主号的 Apple 会话状态。',
+  PROVIDER_TRUST_CHOICE_REQUIRED: '请刷新页面，在验证码通过后选择是否信任此登录环境。',
   PROVIDER_INPUT_INVALID: 'Apple 验证信息不正确，请核对验证方式和输入。',
   PROVIDER_REQUEST_NOT_FOUND: '主号或原认证请求已不可用，请重新读取主号状态。',
   PROVIDER_SCOPE_CHANGED: '主号身份或 Apple 会话已变化，请重新读取当前状态。',
@@ -116,10 +121,38 @@ const controlMessages: Readonly<Record<string, string>> = {
   LOCAL_CLEANUP_INPUT_INVALID: '清理对象或确认内容不正确，请重新核对。',
   LOCAL_CLEANUP_CONFLICT: '清理范围已变化，请刷新数据并查询原操作。',
   LOCAL_CLEANUP_NOT_FOUND: '未找到匹配的清理对象或原操作，请核对当前状态。',
+  ALIAS_EXISTS: '此隐私邮箱已经登记，请从邮箱列表查看。',
+  ALIAS_LIMIT_REACHED: '已达到邮箱数量上限，请核对主号容量。',
+  CREATION_INPUT_INVALID: '创建计划的数量或时间无效，请核对设置。',
+  CREATION_RESOURCE_NOT_FOUND: '找不到原创建计划或尝试，请刷新主号详情。',
+  CREATION_REVIEW_REQUIRED: '上次创建仍需核对，请查看原尝试。',
+  CREATION_REVISION_CHANGED: '创建计划已变化，请重新读取后修改。',
+  CREATION_SOURCE_INELIGIBLE: '此主号当前无法创建邮箱，请核对主号类型和启用状态。',
+  CREDENTIAL_EXPORT_INPUT_INVALID: '导出范围无效，请重新选择邮箱。',
+  CREDENTIAL_EXPORT_SELECTION_INELIGIBLE: '所选邮箱中有无法导出的凭据，请刷新列表并核对选择。',
+  HME_CREATION_NOT_STARTED: '创建请求尚未开始，请核对主号和转发设置。',
+  HME_FORWARDING_INITIALIZED: '转发设置已初始化，可以重新发起一次创建。',
+  HME_OPERATION_REJECTED: 'Apple 未接受这次邮箱操作，请核对邮箱状态。',
+  DATABASE_UNAVAILABLE: '暂时无法读取数据库，请稍后刷新。',
+  EVENT_QUERY_INVALID: '日志筛选条件无效，请核对时间和筛选范围。',
+  MAIL_CONTENT_UNAVAILABLE: '此邮件的正文暂不可用，请查看邮件详情。',
+  MAIL_ORIGINAL_UNAVAILABLE: '此邮件的完整原文暂不可用，请稍后再查看。',
+  MAIL_SCOPE_DENIED: '当前凭据没有访问此邮件的权限。',
+  MAIL_ALREADY_CONSUMED: '这封邮件已被领取，请查看之后的邮件。',
+  MAIL_REFERENCE_CHANGED: '邮件准备记录已变化，请查询原发送记录。',
+  MAIL_PREPARATION_RETIRED: '这条准备记录已停用，请查看原邮件的发送结果。',
+  SYNCHRONIZATION_INPUT_INVALID: '同步请求的范围无效，请重新选择主号。',
+  SYNCHRONIZATION_SOURCE_DISABLED: '主号已停用，请先启用主号。',
+  SYNCHRONIZATION_SOURCE_NOT_FOUND: '找不到要同步的主号，请刷新列表。',
+  SYNCHRONIZATION_COORDINATOR_UNAVAILABLE: '同步服务暂不可用，请稍后查看主号同步进度。',
+  SYNCHRONIZATION_UNAVAILABLE: '暂时无法读取同步状态，请稍后刷新。',
   ENDPOINT_NOT_FOUND: '当前页面使用的接口不存在，请刷新页面并核对安装版本。',
 }
 
 const unknownMessages: Readonly<Record<string, string>> = {
+  CREATION_RESULT_UNKNOWN: '本次创建结果尚未确认，请查询原尝试。',
+  MAIL_CLAIM_UNKNOWN: '邮件领取结果尚未确认，请核对原领取记录。',
+  MAIL_AUTHORIZATION_UNKNOWN: '邮件访问权限仍待确认，请核对原请求。',
   AUTH_COMMIT_UNKNOWN: '登录或密码变更结果尚未确认，请检查当前会话，必要时主动重新登录。',
   ACCOUNT_COMMIT_UNKNOWN: '主号变更结果尚未确认，请查询候选主号，不要重复提交。',
   ADDRESS_COMMIT_UNKNOWN: '邮箱变更结果尚未确认，请查询原对象，不要重复提交。',
@@ -133,15 +166,15 @@ const unknownMessages: Readonly<Record<string, string>> = {
 
 /** Uses controlled codes only; server text, URLs and private values are never reflected. */
 export function controlErrorMessage(error: ControlError): string {
-  if (unknownMessages[error.code]) return unknownMessages[error.code]
-  const known = controlMessages[error.code]
+  if (Object.hasOwn(unknownMessages, error.code)) return unknownMessages[error.code]
+  const known = Object.hasOwn(controlMessages, error.code) ? controlMessages[error.code] : undefined
   if (error.outcome === 'unknown') return `${known ? known + ' ' : ''}本次操作结果尚未确认，请查询原请求，不要重复提交。`
   if (known) return known
   if (error.category === 'request') return '请求尚未发出，请核对输入和当前页面。'
   if (error.category === 'transport') return error.code === 'aborted'
     ? '请求已取消，请先核对当前结果。'
-    : '连接未能完成，请查询原请求或刷新当前状态后再操作。'
-  if (error.category === 'invalid_response') return '未能核实服务器响应，请检查当前结果，变更操作不要重复提交。'
+    : '连接中断，请检查网络并核对操作结果。'
+  if (error.category === 'invalid_response') return '无法核实返回结果。请先核对当前状态，修改操作不要重复提交。'
   if (error instanceof HttpError) {
     if (error.status === 401) return '管理会话已失效，请重新登录。'
     if (error.status === 403) return '此操作未通过安全校验，请刷新当前会话并核对权限。'

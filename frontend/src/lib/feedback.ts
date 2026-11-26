@@ -1,5 +1,16 @@
 import { ControlError, HttpError, controlErrorMessage } from '../transport/errors.ts'
 
+import { diagnosticMessage } from './diagnostic-message.ts'
+
+export type FeedbackDiagnostics = { code?: string; requestId?: string; providerCode?: string; httpStatus?: number }
+export class ReceiptError extends Error {
+  readonly diagnostics: FeedbackDiagnostics
+  constructor(message: string, diagnostics: FeedbackDiagnostics) {
+    super(message)
+    this.diagnostics = diagnostics
+  }
+}
+
 export type FeedbackContext = 'form' | 'action' | 'read'
 export function feedbackPresentation(error: unknown, context: FeedbackContext): 'card' | 'toast' {
   if (context === 'form') return 'card'
@@ -19,11 +30,18 @@ export function feedbackMessage(error: unknown, context?: FeedbackContext): stri
     }
     return controlErrorMessage(error)
   }
-  return error instanceof Error ? error.message : typeof error === 'string' ? error : '操作未能完成，请核对当前状态。'
+  if (error instanceof Error && error.name === 'ClientStateError') return '浏览器无法保存或读取上次操作的记录。请保留当前页面，检查站点存储权限后查询原结果。'
+  if (error instanceof Error && error.name === 'ContractError') return '页面无法读取服务器返回的数据，请刷新页面并核对当前状态。'
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  if (/[\u3400-\u9fff]/u.test(message)) return message
+  return diagnosticMessage(message, context === 'read' ? '读取未完成，请刷新后再试。' : '操作未能完成，请核对当前状态。')
 }
 
-export function feedbackDetails(error: unknown) {
-  return error instanceof ControlError ? { code: error.code, requestId: error.requestId } : undefined
+export function feedbackDetails(error: unknown): FeedbackDiagnostics | undefined {
+  if (error instanceof ReceiptError) return error.diagnostics
+  if (error instanceof ControlError) return { code: error.code, requestId: error.requestId }
+  if (error instanceof Error && 'code' in error && typeof error.code === 'string') return { code: error.code }
+  return undefined
 }
 
 export function feedbackSignature(error: unknown, message: string): string {

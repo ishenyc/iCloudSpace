@@ -1,3 +1,4 @@
+import { feedbackMessage } from '../lib/feedback'
 import { useEffect, useLayoutEffect, useState } from 'react'
 import { Link, Outlet, useLocation, useSearchParams } from 'react-router-dom'
 import { Activity, Archive, BookOpen, ChevronDown, ChevronRight, Cloud, Folder, FolderOpen, Layers2, LogOut, Mail, Menu, Monitor, Moon, Plus, Search, Server, Settings2, ShieldCheck, Sun, Ungroup } from 'lucide-react'
@@ -55,7 +56,7 @@ export function AppShell() {
   useEffect(() => { const keys = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (document.querySelector('[role="dialog"]') && !document.querySelector('.command-list')) return; setCommandOpen(open => !open) } }; window.addEventListener('keydown', keys); return () => window.removeEventListener('keydown', keys) }, [])
   const toggleSidebar = () => { if (compactViewport) { setMobileOpen(true); return }; const value = !collapsed; setManualCollapsed(value); try { localStorage.setItem('icloudspace-sidebar-collapsed', String(value)) } catch {} }
   const navigationLabel = compactViewport ? '打开导航' : collapsed ? '展开侧边栏' : '收起侧边栏'
-  const performLogout = async () => { if (loggingOut) return; setLoggingOut(true); try { await auth.logout() } catch (error: any) { toast(error.message, 'error') } finally { setLoggingOut(false) } }
+  const performLogout = async () => { if (loggingOut) return; setLoggingOut(true); try { await auth.logout() } catch (error: any) { toast(feedbackMessage(error), 'error') } finally { setLoggingOut(false) } }
   const groupLink = (id: string) => aliasGroupPath(id, search)
   const mailboxViewLink = (view: 'current' | 'archived') => { const query = new URLSearchParams(search); query.delete('groupId'); query.delete('manageGroups'); return aliasViewPath(view, query) }
   const groupManagerParams = new URLSearchParams(search); groupManagerParams.set('manageGroups', '1')

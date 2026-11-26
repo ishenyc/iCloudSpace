@@ -354,6 +354,7 @@
   "frontend/src/lib/auth.tsx",
   "frontend/src/lib/clipboard.ts",
   "frontend/src/lib/control.tsx",
+  "frontend/src/lib/diagnostic-message.ts",
   "frontend/src/lib/feedback.ts",
   "frontend/src/lib/hooks.ts",
   "frontend/src/lib/motion-features.ts",

@@ -22,7 +22,7 @@ export function MailViewer({ addressID, address, archived = false, onClose }: { 
   const [documentHTML, setDocumentHTML] = useState<string | null>(null)
   const [frameError, setFrameError] = useState<unknown>(null)
   const [downloadError, setDownloadError] = useState<unknown>(null)
-  const [downloading, setDownloading] = useState(false)
+  const [downloadPart, setDownloadPart] = useState<string | null>(null)
   const downloads = useRef<AbortController | null>(null)
   const mounted = useRef(true)
   const historyList = useRef<HTMLDivElement | null>(null)
@@ -52,17 +52,18 @@ export function MailViewer({ addressID, address, archived = false, onClose }: { 
     }).catch(error => { if (active) setFrameError(error) })
     return () => { active = false; controller.abort(); frame?.revoke() }
   }, [mail, addressID, message.data])
+  const downloading = downloadPart !== null
   async function download(part?: string, filename?: string) {
     if (downloading) return
     const selected = message.data?.metadata.uid
     if (selected === null || selected === undefined) return
     const controller = new AbortController(); downloads.current = controller
-    setDownloading(true); setDownloadError(null)
+    setDownloadPart(part ?? ''); setDownloadError(null)
     try {
       const file = part ? await mail.attachment(addressID, selected, part, controller.signal) : await mail.raw(addressID, selected, { signal: controller.signal })
       await saveMailDownload(file, filename || 'mail-' + selected + '.eml')
     } catch (error) { if (mounted.current && !controller.signal.aborted) reportError(error, 'read', setDownloadError) }
-    finally { if (mounted.current) setDownloading(false) }
+    finally { if (mounted.current) setDownloadPart(null) }
   }
   const current = message.data
   const code = codes.data?.find(item => item.uid === current?.metadata.uid)?.code
@@ -81,8 +82,8 @@ export function MailViewer({ addressID, address, archived = false, onClose }: { 
       <div className="mail-reader-toolbar"><p className="section-note">{archived ? '归档后已保存的历史内容仍可查看。' : ''}查看与下载不会消费邮件或标记已读。</p>
         {hasHistory && <Button variant="secondary" size="sm" className="mail-history-toggle" aria-expanded={listOpen} onClick={() => setShowList(!showList)}>{listOpen ? '返回邮件正文' : '查看历史目录'}</Button>}
       </div>
-      {error ? <Alert error={error}><RefreshButton variant="outline" size="sm" pending={message.refreshing || history.refreshing || codes.manualRefreshing} onRefresh={refresh}>重新读取</RefreshButton></Alert> : null}
-      {(current || !archived && uid !== null) && <div className="detail-primary-actions mail-reader-actions">{!archived && <Button variant={uid === null ? 'default' : 'secondary'} onClick={() => { setUID(null); setTab('html'); setShowList(false); setDownloadError(null) }}>最新邮件</Button>}{current?.metadata.uid != null && <Button variant="secondary" disabled={downloading || current.metadata.raw_state !== 'available'} onClick={() => void download()}><Download size={14} />下载原始邮件</Button>}</div>}
+      {error ? <Alert error={error} context="read"><RefreshButton variant="outline" size="sm" pending={message.refreshing || history.refreshing || codes.manualRefreshing} onRefresh={refresh}>重新读取</RefreshButton></Alert> : null}
+      {(current || !archived && uid !== null) && <div className="detail-primary-actions mail-reader-actions">{!archived && <Button variant={uid === null ? 'default' : 'secondary'} onClick={() => { setUID(null); setTab('html'); setShowList(false); setDownloadError(null) }}>最新邮件</Button>}{current?.metadata.uid != null && <Button variant="secondary" disabled={downloading || current.metadata.raw_state !== 'available'} loading={downloadPart === ''} loadingLabel="正在下载…" onClick={() => void download()}><Download size={14} />下载原始邮件</Button>}</div>}
       <div className="mail-reader-layout" data-history={hasHistory} data-empty={empty} data-list-open={listOpen}>
       {hasHistory && <section className="mail-reader-history" aria-label="历史邮件目录">
         <header className="mail-history-header"><h3>历史邮件</h3>{history.refreshing && <small className="text-muted">正在更新…</small>}</header>
@@ -93,7 +94,7 @@ export function MailViewer({ addressID, address, archived = false, onClose }: { 
         <div className="notice toolbar" aria-label="本封邮件验证码"><span className="text-muted">验证码</span>{code ? <><strong className="font-mono text-lg tracking-widest">{code}</strong><CopyButton value={code} label="复制验证码" /></> : <span>{codes.loading ? '读取中…' : '本封未提取到验证码'}</span>}</div>
         {!current.body_complete && <Alert tone="warning">当前保存的正文不完整。原始邮件可用时，可以下载核对。</Alert>}
         <Tabs value={tab} onValueChange={setTab}><TabsList><TabsTrigger value="html">格式化正文</TabsTrigger><TabsTrigger value="text">纯文本</TabsTrigger></TabsList><TabsContent value="html">{documentHTML ? <iframe title="邮件正文" sandbox="" referrerPolicy="no-referrer" srcDoc={documentHTML} className="min-h-[40vh] w-full rounded-lg border bg-white" /> : frameError ? <p className="text-muted">格式化正文未能打开，可切换纯文本或重新读取。</p> : <Loading label="正在准备隔离正文" />}</TabsContent><TabsContent value="text"><pre className="whitespace-pre-wrap break-words">{current.text || '无纯文本正文'}</pre></TabsContent></Tabs>
-        {current.attachments.length > 0 && <section className="detail-section"><h3>附件</h3><div className="stack">{current.attachments.map(part => <Button variant="secondary" className="mail-attachment" key={part.part} disabled={downloading || !part.complete || current.metadata.uid === null || current.metadata.raw_state !== 'available'} onClick={() => void download(part.part || 'root', part.filename || 'attachment')}><Paperclip size={14} /><span className="truncate" title={part.filename || '未命名附件'}>{part.filename || '未命名附件'}</span><small title={part.byte_size + ' 字节'}>{formatMailSize(part.byte_size)}</small></Button>)}</div></section>}
+        {current.attachments.length > 0 && <section className="detail-section"><h3>附件</h3><div className="stack">{current.attachments.map(part => <Button variant="secondary" className="mail-attachment" key={part.part} disabled={downloading || !part.complete || current.metadata.uid === null || current.metadata.raw_state !== 'available'} loading={downloadPart === (part.part || 'root')} loadingLabel="正在下载附件…" onClick={() => void download(part.part || 'root', part.filename || 'attachment')}><Paperclip size={14} /><span className="truncate" title={part.filename || '未命名附件'}>{part.filename || '未命名附件'}</span><small title={part.byte_size + ' 字节'}>{formatMailSize(part.byte_size)}</small></Button>)}</div></section>}
       </> : empty ? <div className="mail-reader-empty"><Empty title={archived ? '没有保留的历史邮件' : '当前没有可展示的邮件'} description={archived ? '此邮箱已归档，当前没有保留的历史邮件。' : '同步完成后可刷新查看。查看不会消费邮件或标记已读。'} /></div> : !error && hasHistory ? <Empty compact title={archived ? '请选择历史邮件' : '查看已同步邮件'} description="从历史目录选择一封邮件，或直接打开最近一封。" action={firstHistoryUID !== null && <Button variant="secondary" disabled={history.stale} onClick={() => selectMessage(firstHistoryUID)}>查看最近一封邮件</Button>} /> : !error && history.loading ? <Loading label="正在读取邮件目录" /> : null}</div></div>
     </div>
   </Sheet>

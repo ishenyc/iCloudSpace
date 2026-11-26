@@ -77,6 +77,7 @@ export class AliasActions {
     }
   }
   get recoveryRequired() { return this.restorationFailed }
+  get awaitingQuery(): readonly PendingAliasAction[] { return this.pending.filter(record => !this.active.has(record.addressID)) }
   get pending(): readonly PendingAliasAction[] { return [...this.unresolved.values()] }
   private persist() { if (this.store && !this.restorationFailed) try { const raw=JSON.stringify({version:1,operations:this.pending});this.store.storage.setItem(this.store.key,raw);if(this.store.storage.getItem(this.store.key)!==raw)throw new Error() } catch { this.restorationFailed = true } }
   private remember(operation: PendingAliasAction) { this.unresolved.set(this.referenceID(operation), operation); this.persist() }

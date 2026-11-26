@@ -4,7 +4,7 @@
 
 **A self-hosted workspace for private email addresses**
 
-First public release: **1.5.0**.
+Current release: **[1.6.0](https://github.com/ishenyc/iCloudSpace/releases/tag/v1.6.0)**.
 
 Connect accounts, organize aliases, and keep mail, credentials and operations in one place.
 

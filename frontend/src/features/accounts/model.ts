@@ -87,7 +87,7 @@ export function formatTime(value: string | null | undefined, options?: { seconds
 export function unknownMutation(error: unknown): boolean { return error instanceof ControlError && error.outcome === 'unknown' }
 export function accountErrorHint(error: unknown): string | undefined {
   if (!(error instanceof ControlError)) return undefined
-  return ({ACCOUNT_HAS_DEPENDENT_STATE:'此主号有关联数据，必须使用退休流程；本页没有删除这些数据。',ACCOUNT_IDENTITY_IN_USE:'此主号已有地址，身份、收件命名空间、来源模式或后缀不能更改。',ACCOUNT_SOURCE_CHANGE_REQUIRED:'收件来源发生变化，需要重新核对并明确确认。',ACCOUNT_REVISION_CONFLICT:'主号已发生变化，请重新读取修订版本后编辑。',INSTALLATION_READ_ONLY:'安装当前只读，不能提交更改。'} as Record<string,string>)[error.code] || error.code
+  return ({ACCOUNT_HAS_DEPENDENT_STATE:'此主号有关联数据，必须使用退休流程；本页没有删除这些数据。',ACCOUNT_IDENTITY_IN_USE:'此主号已有地址，身份、收件命名空间、来源模式或后缀不能更改。',ACCOUNT_SOURCE_CHANGE_REQUIRED:'收件来源发生变化，需要重新核对并明确确认。',ACCOUNT_REVISION_CONFLICT:'主号已发生变化，请重新读取修订版本后编辑。',INSTALLATION_READ_ONLY:'安装当前只读，不能提交更改。'} as Record<string,string>)[error.code]
 }
 export function newOperationKey(prefix: string): string { return prefix + '_' + crypto.randomUUID().replace(/-/g, '') }
 
@@ -142,7 +142,7 @@ export function scheduleView(raw: CreationPolicy | null): ScheduleView {
   const error = raw?.last_error_detail || raw?.paused_reason || ''
   return { raw, enabled: raw?.enabled ?? false, status: !raw ? 'unconfigured' : raw.paused_reason ? 'paused' : raw.enabled ? 'scheduled' : 'disabled',
   nextRunAt: raw?.slots[0]?.scheduled_for ?? null, plannedAt: raw?.slots[0]?.scheduled_for ?? null, plannedTimes: raw?.slots.map(s => s.scheduled_for) ?? [], lastAttemptedAt: raw?.last_attempted_at ?? null,
-  lastCreatedAt: raw?.last_confirmed_at ?? null, lastAliasAddress: raw?.last_address ?? '', lastError: error === 'unresolved_attempt' ? '原创建结果待确认，请先查询原尝试。' : error } }
+  lastCreatedAt: raw?.last_confirmed_at ?? null, lastAliasAddress: raw?.last_address ?? '', lastError: error } }
 export interface DetailOwners { accounts: AccountsModel; addresses: AddressesModel; providerSessions: ProviderSessionsModel; creation: CreationModel; synchronization: SynchronizationModel }
 export interface AccountDetail { account: AccountView; appleSession: AppleSessionView | null; autoCreation: ScheduleView | null; errors: unknown[] }
 export async function accountDetail(owners: DetailOwners, id: string, signal: AbortSignal): Promise<AccountDetail> {

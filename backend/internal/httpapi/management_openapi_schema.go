@@ -115,8 +115,8 @@ func managementCommonSchemas() openObject {
 	props["phones"] = openNullable(openArray(openRef("MAppleTrustedPhone")))
 	props["security_keys"] = openNullable(openArray(openRef("MAppleSecurityKeyChallenge")))
 	for name, fields := range map[string]map[string][]string{
-		"MProviderAuth":    {"state": {"password", "mfa", "complete", "failed", "expired"}, "next_action": {"", "login", "load_challenge", "send_device_code", "verify_device_code", "send_sms", "verify_sms", "verify_security_key", "trust_browser", "exchange_token", "validate_session", "restore_session", "clear_authentication"}},
-		"MProviderReceipt": {"action": {"login", "load_challenge", "send_device_code", "verify_device_code", "send_sms", "verify_sms", "verify_security_key", "trust_browser", "exchange_token", "validate_session", "restore_session", "clear_authentication"}},
+		"MProviderAuth":    {"state": {"password", "mfa", "complete", "failed", "expired"}, "next_action": {"", "login", "load_challenge", "send_device_code", "verify_device_code", "send_sms", "verify_sms", "verify_security_key", "trust_browser", "decline_trust", "exchange_token", "validate_session", "restore_session", "clear_authentication"}},
+		"MProviderReceipt": {"action": {"login", "load_challenge", "send_device_code", "verify_device_code", "send_sms", "verify_sms", "verify_security_key", "trust_browser", "decline_trust", "exchange_token", "validate_session", "restore_session", "clear_authentication"}},
 		"MSyncProgress":    {"trigger": {"automatic", "manual", "public"}, "phase": {"directory", "mail", "finalize", "resolve"}, "state": {"queued", "running", "waiting", "finished"}},
 		"MSyncWake":        {"disposition": {"queued", "coalesced"}},
 		"MCreationPolicy":  {"schedule_kind": {"scheduled", "interval"}},

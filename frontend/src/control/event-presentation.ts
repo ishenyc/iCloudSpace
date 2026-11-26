@@ -1,3 +1,4 @@
+import { diagnosticMessage } from '../lib/diagnostic-message.ts'
 import type { RuntimeEvent } from './event-contracts.ts'
 
 const labels: Record<string, string> = {
@@ -22,5 +23,6 @@ export function runtimeStageLabel(event: RuntimeEvent): string | undefined {
 }
 export function runtimeMessage(event: RuntimeEvent): string {
   const label = runtimeStageLabel(event)
-  return label ? label + (event.error_code ? ' · ' + event.error_code : '') : event.message
+  if (event.error_code) return (label ? label + '。' : '') + diagnosticMessage(event.error_code, '当前步骤遇到问题，请展开诊断详情。')
+  return label || event.message
 }

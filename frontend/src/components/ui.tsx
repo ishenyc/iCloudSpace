@@ -6,8 +6,8 @@ import { AlertCircle, ArrowLeft, ArrowRight, Check, CircleCheck, Copy, Inbox, In
 import { cn } from '../lib/utils'
 import { motionEase, motionTiming } from '../lib/motion'
 import { CopyStatusIcon } from './animated-icon'
-import { ControlError, controlErrorMessage } from '../transport/errors'
-import { feedbackDetails, feedbackIsVisible, feedbackMessage, feedbackPresentation, feedbackSignature, type FeedbackContext } from '../lib/feedback'
+import { ControlError } from '../transport/errors'
+import { feedbackDetails, feedbackIsVisible, feedbackMessage, feedbackPresentation, feedbackSignature, type FeedbackContext, type FeedbackDiagnostics } from '../lib/feedback'
 export { Button } from './ui/button'
 import { Button } from './ui/button'
 import { Input as ShadcnInput } from './ui/input'
@@ -111,10 +111,13 @@ export function Tip({ label, children, enabled = true }: { label: string; childr
   return <Tooltip open={enabled && open} onOpenChange={next => setOpen(enabled && next)}><TooltipTrigger asChild>{children}</TooltipTrigger>{enabled && <TooltipContent side="right" sideOffset={10}>{label}</TooltipContent>}</Tooltip>
 }
 export function TooltipProvider({ children }: { children: ReactNode }) { return <ShadcnTooltipProvider delayDuration={320} skipDelayDuration={100}>{children}</ShadcnTooltipProvider> }
-export function Alert({ error, children, tone = 'danger', attention = error ? 'notify' : 'none', title, actions }: { error?: any; children?: ReactNode; tone?: string; attention?: 'focus' | 'notify' | 'none'; title?: string; actions?: ReactNode }) {
+export function Alert({ error, children, tone, diagnostics, context, attention = error ? 'notify' : 'none', title, actions }: { error?: any; children?: ReactNode; tone?: string; diagnostics?: FeedbackDiagnostics; context?: FeedbackContext; attention?: 'focus' | 'notify' | 'none'; title?: string; actions?: ReactNode }) {
   const surface = useRef<HTMLDivElement>(null), noticed = useRef(''), id = useId(), toast = useToast(), reduced = useReducedMotion()
   const controlled = error instanceof ControlError
-  const message = controlled ? controlErrorMessage(error) : error?.message || (typeof error === 'string' ? error : null)
+  const uncertain = controlled && (error.outcome === 'unknown' || /UNKNOWN|UNSETTLED|UNCONFIRMED/.test(error.code))
+  tone ??= error && !uncertain ? 'danger' : uncertain ? 'warning' : 'info'
+  const message = error ? feedbackMessage(error, context) : null
+  const detail = diagnostics ?? feedbackDetails(error)
   useEffect(() => {
     const node = surface.current
     if (!node || attention === 'none') return
@@ -138,11 +141,11 @@ export function Alert({ error, children, tone = 'danger', attention = error ? 'n
     return () => cancelAnimationFrame(frame)
   }, [error, message, children, attention, id, toast, reduced])
   if (!error && !children) return null
-  const heading = title || (error ? controlled && (error.outcome === 'unknown' || /UNKNOWN|UNSETTLED|UNCONFIRMED/.test(error.code)) ? '结果待确认' : '操作未完成' : null)
+  const heading = title || (error ? uncertain ? '结果待确认' : '操作未完成' : null)
   const Icon = tone === 'danger' ? AlertCircle : tone === 'warning' ? TriangleAlert : tone === 'success' ? CircleCheck : Info
   return <ShadcnAlert ref={surface} tabIndex={-1} aria-labelledby={heading ? id : undefined} role={tone === 'danger' ? 'alert' : 'status'} className="system-alert" data-tone={tone} data-has-actions={Boolean(actions) || undefined}>
     <span className="system-alert-icon" aria-hidden="true"><Icon /></span>
-    <AlertDescription>{heading && <div id={id} className="system-alert-title">{heading}</div>}<div className="system-alert-message">{message || children}</div>{message && children && <div className="system-alert-context">{children}</div>}{(controlled || error?.requestId) && <details className="operation-details"><summary>查看错误详情</summary><div className="system-alert-request">{controlled && <><span>错误代码</span><code>{error.code}</code></>}{error?.requestId && <><span>请求编号</span><code>{error.requestId}</code></>}</div></details>}</AlertDescription>
+    <AlertDescription>{heading && <div id={id} className="system-alert-title">{heading}</div>}<div className="system-alert-message">{message || children}</div>{message && children && <div className="system-alert-context">{children}</div>}{detail && <details className="operation-details"><summary>查看诊断详情</summary><div className="system-alert-request">{detail.code && <><span>诊断码</span><code>{detail.code}</code></>}{detail.providerCode && <><span>服务商代码</span><code>{detail.providerCode}</code></>}{detail.httpStatus && <><span>HTTP 状态</span><code>{detail.httpStatus}</code></>}{detail.requestId && <><span>请求编号</span><code>{detail.requestId}</code></>}</div></details>}</AlertDescription>
     {actions && <div className="system-alert-actions">{actions}</div>}
   </ShadcnAlert>
 }
@@ -160,9 +163,9 @@ export function Pagination({ page, size, total, onPage, onSize, disabled = false
 export { copyText } from '../lib/clipboard'
 export function CopyButton({ value, label = '复制' }: { value: string; label?: string }) {
   const [copied, setCopied] = useState(false); const toast = useToast()
-  return <Button variant="secondary" size="sm" className="copy-button" onClick={async () => { try { await copyText(value); setCopied(true); setTimeout(() => setCopied(false), 1800) } catch (e: any) { toast(e.message, 'error') } }}><CopyStatusIcon copied={copied} size={14} />{copied ? '已复制' : label}</Button>
+  return <Button variant="secondary" size="sm" className="copy-button" onClick={async () => { try { await copyText(value); setCopied(true); setTimeout(() => setCopied(false), 1800) } catch (e: any) { toast(feedbackMessage(e, 'read'), 'error') } }}><CopyStatusIcon copied={copied} size={14} />{copied ? '已复制' : label}</Button>
 }
-type ToastOptions = { key?: string; action?: { label: string; run: () => void }; details?: { code: string; requestId?: string } }
+type ToastOptions = { key?: string; action?: { label: string; run: () => void }; details?: FeedbackDiagnostics }
 type ToastFn = (message: string, tone?: 'success' | 'error' | 'info', options?: ToastOptions) => void
 const ToastContext = createContext<ToastFn>(() => {})
 type ToastItem = ToastOptions & { id: number; message: string; tone: string }

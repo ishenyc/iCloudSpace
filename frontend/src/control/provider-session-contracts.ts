@@ -1,6 +1,6 @@
 import { ContractError, decodeIdentifier, decodeInstant } from './contracts.ts'
 
-export type ProviderAction = 'login' | 'load_challenge' | 'send_device_code' | 'verify_device_code' | 'send_sms' | 'verify_sms' | 'verify_security_key' | 'trust_browser' | 'exchange_token' | 'validate_session' | 'restore_session' | 'clear_authentication'
+export type ProviderAction = 'login' | 'load_challenge' | 'send_device_code' | 'verify_device_code' | 'send_sms' | 'verify_sms' | 'verify_security_key' | 'trust_browser' | 'decline_trust' | 'exchange_token' | 'validate_session' | 'restore_session' | 'clear_authentication'
 export type ProviderChallengeAction = Exclude<ProviderAction, 'login' | 'restore_session' | 'clear_authentication'>
 export interface ProviderSessionStatus {
   source_id: string; principal_revision: string; revision: string | null; authenticated: boolean
@@ -9,6 +9,7 @@ export interface ProviderSessionStatus {
 export interface ProviderReceipt {
   request_key: string; action: ProviderAction; outcome: 'accepted' | 'rejected' | 'unknown' | 'not_sent'
   error_code: string; prepared: boolean; started_at: string; finished_at: string | null
+  http_status?: number; provider_code?: string
 }
 export interface ProviderAuthOptions {
   auth_type: string; trusted_device: boolean; sms: boolean
@@ -28,7 +29,8 @@ export interface ProviderSecurityKeyAssertion {
   challenge_id: string; credential_id: string; client_data_json: string; authenticator_data: string; signature: string; user_handle?: string
 }
 export type ProviderActionInput = ProviderRequest & { challenge_token: string } & (
-  { action: 'load_challenge' | 'send_device_code' | 'trust_browser' | 'exchange_token' | 'validate_session' } |
+  { action: 'load_challenge' | 'send_device_code' | 'decline_trust' | 'exchange_token' | 'validate_session' } |
+  { action: 'trust_browser'; confirm_browser_trust: true } |
   { action: 'verify_device_code'; code: string } |
   { action: 'send_sms'; phone_id: string; mode: 'sms' | 'voice' } |
   { action: 'verify_sms'; phone_id: string; mode: 'sms' | 'voice'; code: string } |
@@ -38,7 +40,7 @@ export type ProviderActionInput = ProviderRequest & { challenge_token: string } 
 // validates its full schema/binding; the model never keeps it in session state.
 export interface ProviderRestore extends ProviderRequest { document: string | Readonly<Record<string, unknown>> }
 
-const actions = ['login', 'load_challenge', 'send_device_code', 'verify_device_code', 'send_sms', 'verify_sms', 'verify_security_key', 'trust_browser', 'exchange_token', 'validate_session', 'restore_session', 'clear_authentication'] as const
+const actions = ['login', 'load_challenge', 'send_device_code', 'verify_device_code', 'send_sms', 'verify_sms', 'verify_security_key', 'trust_browser', 'decline_trust', 'exchange_token', 'validate_session', 'restore_session', 'clear_authentication'] as const
 export function providerObject(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new ContractError('provider_object')
   return value as Record<string, unknown>
@@ -82,7 +84,10 @@ export function decodeProviderReceipt(value: unknown): ProviderReceipt {
   const data = providerObject(value), outcome = providerChoice(data.outcome, ['accepted', 'rejected', 'unknown', 'not_sent'] as const)
   const prepared = providerBoolean(data.prepared)
   if (prepared && outcome !== 'unknown') throw new ContractError('provider_receipt')
+  const status = data.http_status
+  if (status !== undefined && (typeof status !== 'number' || !Number.isInteger(status) || status < 100 || status > 599)) throw new ContractError('provider_receipt')
   return { request_key: providerRequestKey(data.request_key), action: providerAction(data.action), outcome,
+    ...(status === undefined ? {} : {http_status:status}), ...(data.provider_code === undefined ? {} : {provider_code:providerText(data.provider_code, 64)}),
     error_code: providerText(data.error_code, 80), prepared, started_at: decodeInstant(data.started_at), finished_at: nullableInstant(data.finished_at) }
 }
 export function decodeProviderAuthOptions(value: unknown): ProviderAuthOptions {

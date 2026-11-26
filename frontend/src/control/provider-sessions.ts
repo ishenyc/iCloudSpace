@@ -64,8 +64,12 @@ export class ProviderSessionsModel {
     sourceID = input(() => decodeIdentifier(sourceID))
     const body = input(() => {
       const data = providerObject(value)
-      const action = providerChoice(data.action, ['load_challenge', 'send_device_code', 'verify_device_code', 'send_sms', 'verify_sms', 'verify_security_key', 'trust_browser', 'exchange_token', 'validate_session'] as const)
+      const action = providerChoice(data.action, ['load_challenge', 'send_device_code', 'verify_device_code', 'send_sms', 'verify_sms', 'verify_security_key', 'trust_browser', 'decline_trust', 'exchange_token', 'validate_session'] as const)
       const request: Record<string, unknown> & { request_key: string; challenge_token: string } = { request_key: providerRequestKey(data.request_key, true), challenge_token: providerChallengeToken(data.challenge_token), action }
+      if (action === 'trust_browser') {
+        if (data.confirm_browser_trust !== true) throw new ContractError('provider_trust_choice')
+        request.confirm_browser_trust = true
+      }
       if (action === 'verify_device_code' || action === 'verify_sms') request.code = code(data.code)
       if (action === 'send_sms' || action === 'verify_sms') { request.phone_id = providerText(data.phone_id, 64, true); request.mode = providerChoice(data.mode, ['sms', 'voice'] as const) }
       if (action === 'verify_security_key') {
