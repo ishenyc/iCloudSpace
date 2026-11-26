@@ -11,7 +11,7 @@ import { useControl, useControlSession } from '../lib/control'
 import { AccountRecoveryStore } from '../control/account-recovery'
 import type { AccountRecovery, AccountRecoveryInput, AccountRecoverySnapshot } from '../control/account-recovery'
 import { ClientStateError, safeBrowserStorage } from '../control/client-state-handoff'
-import { AccountRecoveryActions, accountRecoveryCopyValue, accountRecoveryLabel, providerRecoveryDisposition, retainReadableAccountRecoveries, sameAccountRecovery } from './accounts/recovery'
+import { AccountRecoveryActions, accountRecoveryCopyValue, accountRecoveryLabel, appleVerificationAction, providerRecoveryDisposition, retainReadableAccountRecoveries, sameAccountRecovery } from './accounts/recovery'
 import { LocalCleanupDialog } from './local-cleanup'
 import { useResource } from '../lib/hooks'
 import { AnimatePresence, AnimatedSection } from '../lib/motion'
@@ -233,7 +233,7 @@ export function AccountDetailPage() {
     finally { if (ticket === generation.current && alive(id)) { lock.current = false; setBusy(''); refreshSavedRecovery() } }
   }
   function openApple(next: Intent = null, error: unknown = null) {
-    intent.current = next; setAppleStep((applePending||knownProviderRef.current)&&appleResult?.state!=='password'?'verification':'login'); setAppleError(error)
+    intent.current = next; setAppleStep(applePending || knownProviderRef.current ? 'verification' : 'login'); setAppleError(error)
     setAppleForm({ appleId: apple?.appleId || account?.email || '', password: '', region: apple?.region || 'global', code: '', challengeId: '', flow: '' }); if (!applePending && !knownProviderRef.current) {setAppleResult(null);setAppleStep('login')}; setAppleOpen(true)
   }
   function closeApple() {
@@ -272,7 +272,8 @@ export function AccountDetailPage() {
   async function submitApple(event: FormEvent) {
     event.preventDefault(); if (busy || applePending) return
     if (appleStep === 'login' && !appleForm.password) { setAppleError(new Error('请填写 Apple 账户密码。')); return }
-    const action = appleStep === 'login' ? 'login' : appleResult?.next_action || (factor === 'sms' ? 'verify_sms' : 'verify_device_code')
+    const action = appleStep === 'login' ? 'login' : appleAction
+    if (!action) return
     if ((action === 'verify_device_code' || action === 'verify_sms') && !/^\d{6}$/.test(appleForm.code.trim())) { setAppleError(new Error('请输入 6 位数字验证码。')); return }
     if (action === 'verify_security_key') {setAppleError(new Error('Apple 原站硬件安全密钥交接尚未完成，请勿将此流程视为成功。'));return}
     const request_key = newOperationKey('apple')
@@ -315,7 +316,11 @@ export function AccountDetailPage() {
   }
   async function applyApple(result:ProviderAuthResult,original:AccountRecovery,fromQuery=false):Promise<Intent>{
     if(!alive(id)||original.kind!=='provider')return null
-    setAppleResult(result);setAppleStep(result.state==='password'||result.state==='failed'||result.state==='expired'?'login':'verification')
+    setAppleResult(result)
+    setAppleStep(result.state==='failed' || result.state==='expired' || result.state==='password' && !result.next_action ? 'login' : 'verification')
+    if (result.next_action === 'verify_sms' || result.next_action === 'verify_device_code') {
+      setFactor(result.next_action === 'verify_sms' ? 'sms' : 'device')
+    }
     setPhone(previous=>result.options?.phones.some(p=>p.id===previous)?previous:result.options?.phones[0]?.id||'')
     if(fromQuery)intent.current=null
     const disposition=providerRecoveryDisposition(result)
@@ -329,7 +334,9 @@ export function AccountDetailPage() {
     }
     if(result.state==='complete'&&result.session?.authenticated&&result.durable&&result.receipt?.outcome==='accepted'){
       const resume=fromQuery?null:intent.current;intent.current=null;setAppleOpen(false);setRecovery(null);await resource.refresh();if(alive(id))toast('Apple 会话已确认。','success');return resume
-    }else if(result.receipt?.error_code && !(result.state==='mfa'&&result.receipt.outcome==='accepted'&&result.receipt.error_code==='second_factor_required'))setAppleError(new Error(result.receipt.error_code))
+    }else if(result.receipt?.error_code && !(result.state==='mfa'&&result.receipt.outcome==='accepted'&&result.receipt.error_code==='second_factor_required')){
+      setAppleError(new Error(result.receipt.error_code === 'challenge_method_unavailable' ? 'Apple 暂未提供本页面支持的验证方式。可以重新加载验证方式。' : result.receipt.error_code))
+    }
     else setAppleError(null)
     return null
   }
@@ -450,7 +457,9 @@ export function AccountDetailPage() {
   async function revealSource(){await run('source-reveal',async()=>{const value=await control.accounts.reveal(id);if(alive(id))setSourceSecret(value.result.credentials.imap_password)},undefined,true)}
   const exports=pendingKeyExports(keys??[],window.location.origin),otpExport=exports.otp,imapExport=exports.imap,jsonlExport=exports.jsonl
   const blocked=Boolean(busy)||recovery!==null||recoverySnapshot.blocked||unresolvedSaved.length>0
-  const appleNeedsCode=appleStep==='verification'&&(!appleResult?.next_action||appleResult.next_action==='verify_device_code'||appleResult.next_action==='verify_sms')
+  const appleAction = appleVerificationAction(appleResult, factor)
+  const appleActionLabel = appleAction && providerLabels[appleAction] || (appleAction === 'verify_security_key' ? '验证安全密钥' : 'Apple 认证')
+  const appleNeedsCode = appleStep === 'verification' && (appleAction === 'verify_device_code' || appleAction === 'verify_sms')
   if (!account || account.id !== id) return <div className="stack"><PageHeader title="主号详情" actions={<Button variant="ghost" asChild><Link to="/accounts"><ArrowLeft size={14} /> 返回</Link></Button>} />{resource.error ? <><Alert error={resource.error} /><RefreshButton variant="outline" pending={resource.loading || resource.manualRefreshing} onRefresh={resource.refresh} loadingLabel="重新读取中…">重新读取</RefreshButton></> : <Panel><Loading label="正在读取主号…" /></Panel>}</div>
   return <div className="stack"><PageHeader eyebrow={<Link className="text-link" to="/accounts">WORKSPACE / ACCOUNTS</Link>} title={accountIdentity(account)} description={account.name || '管理连接、Apple 会话与所属隐私邮箱。'} actions={<><Button variant="outline" disabled={blocked || !account.enabled || account.syncProgress?.active} aria-busy={busy === 'mail-sync' || !!account.syncProgress?.active} onClick={() => void syncMail()}><RefreshIcon refreshing={busy === 'mail-sync' || !!account.syncProgress?.active} size={14} />{busy === 'mail-sync' || account.syncProgress?.active ? '同步处理中' : '同步邮件'}</Button><Button variant="secondary" asChild><Link to={`/accounts/${id}/edit`}>编辑主号</Link></Button></>} />
     {(actionError && !confirm && !addOpen || resource.error) && <Alert error={!confirm && !addOpen && actionError || resource.error} attention={actionError ? "focus" : "notify"} />}{resource.data?.errors.map((error,index)=><Alert key={index} error={error}/>)}{recovery && <Alert tone="warning"><div className="stack"><span>原操作结果尚未确认，保留原引用，仅查询，不会重新提交。</span>{recovery.kind==='attempt'&&<code>原尝试 #{recovery.id}</code>}<Button variant="outline" disabled={Boolean(busy)} loading={busy === 'query-original'} loadingLabel="正在查询…" onClick={()=>void queryRecovery()}>查询原操作结果</Button></div></Alert>}
@@ -469,7 +478,38 @@ export function AccountDetailPage() {
     {confirm === 'delete' && <LocalCleanupDialog key={id} sourceID={id} revision={account.raw.revision} confirmation={account.raw.address_namespace} onClose={() => setConfirm(null)} onAccepted={() => { changed(id); navigate('/accounts', { replace: true }) }} />}
     <Modal open={sourceSecret!==null} onOpenChange={open=>{if(!open)setSourceSecret(null)}} title="连接凭据" description="仅在本弹窗短暂持有，关闭后清除页面引用。" footer={<CopyButton value={sourceSecret||''} label="复制 IMAP 密码"/>}><Input type="password" readOnly value={sourceSecret||''} aria-label="当前连接密码"/></Modal><Modal open={errorOpen} onOpenChange={setErrorOpen} title="完整同步诊断" description="诊断是纯文本展示，不执行其中的 HTML。" wide footer={<CopyButton value={account.lastSyncErrorLog || account.lastSyncError || ''} label="复制完整诊断" />}><pre className="mono" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '55vh', overflow: 'auto' }}>{account.lastSyncErrorLog || account.lastSyncError}</pre><Link className="text-link" to={`/activity?account_id=${encodeURIComponent(id)}`} onClick={() => setErrorOpen(false)}>查看主号运行日志</Link></Modal>
     <Modal open={addOpen} onOpenChange={open => { if (!busy) setAddOpen(open) }} title={appleCreate?'创建 Apple 隐私邮箱':'手动登记邮箱'} description={appleCreate?'只发送一次明确创建请求；结果未确认时查询原请求，不重新创建。':custom ? `填写 @${account.emailSuffix} 下的地址，仅登记本地取件身份。` : '登记已经存在的隐私邮箱地址；此操作不会在 Apple 创建新地址。'} footer={<><Button variant="outline" disabled={blocked} onClick={() => setAddOpen(false)}>取消</Button><Button type="submit" form="register-alias" disabled={blocked} loading={busy === 'add'} loadingLabel="正在处理…">{appleCreate?'创建隐私邮箱':'登记邮箱'}</Button></>}><form id="register-alias" className="stack" onSubmit={addAlias}>{!appleCreate && <Field label="邮箱地址"><Input required type="email" value={aliasDraft.address} disabled={blocked} onChange={e => setAliasDraft(previous => ({ ...previous, address: e.target.value }))} /></Field>}<Field label="用途备注"><Input maxLength={100} value={aliasDraft.label} disabled={blocked} onChange={e => setAliasDraft(previous => ({ ...previous, label: e.target.value }))} /></Field>{Boolean(actionError) && <Alert error={actionError} attention="focus">{accountErrorHint(actionError)}</Alert>}</form></Modal>
-    <Modal open={appleOpen} onOpenChange={open => { if (!open) closeApple() }} title={appleStep === 'verification' ? providerLabels[appleResult?.next_action||'verify_device_code']||'Apple 认证步骤' : '登录 Apple 账户'} description={appleStep === 'verification' ? '按服务器返回的当前步骤操作；设备、短信、信任和会话交换分别确认。' : 'Apple 账户密码仅在登录请求中发送，不在浏览器持久保存。'} footer={<><Button variant="outline" disabled={blocked} onClick={closeApple}>取消</Button>{appleStep === 'verification' && <Button variant="ghost" disabled={blocked} onClick={() => { setAppleStep('login'); setAppleError(null); setAppleForm(previous => ({ ...previous, password: '', code: '', challengeId: '', flow: '' })) }}>返回登录</Button>}<Button type="submit" form="apple-auth" disabled={blocked||appleResult?.next_action==='verify_security_key'} loading={busy === 'apple-auth'} loadingLabel="正在验证…">{appleStep === 'verification' ? providerLabels[appleResult?.next_action||'verify_device_code']||'读取下一步骤' : '继续'}</Button></>}><form id="apple-auth" className="stack" onSubmit={submitApple}>{applePending && <Alert tone="warning"><div className="stack"><span>原认证请求 {applePending.request_key} 尚待确认，仅查询原请求。</span><Button type="button" variant="outline" disabled={Boolean(busy)} loading={Boolean(applePending && busy === 'query-saved:'+accountRecoveryLabel(applePending))} loadingLabel="正在查询…" onClick={()=>void queryApple()}>查询原认证结果</Button></div></Alert>}{appleResult?.options?.security_keys.length ? <Alert tone="warning">Apple 原站硬件安全密钥交接尚未完成，当前页面不能完成此分支。</Alert> : null}{Boolean(appleError) && <Alert error={appleError} attention="focus">{accountErrorHint(appleError)}</Alert>}<AnimatePresence initial={false} mode="wait">{appleStep === 'login' ? <AnimatedSection key="apple-login" className="stack" ref={appleStepPanel} onAnimationComplete={focusAppleStep}><Field label="Apple ID"><Input required autoComplete="username" value={appleForm.appleId} disabled onChange={e => setAppleForm(previous => ({ ...previous, appleId: e.target.value }))} /></Field><Field label="Apple 账户密码"><Input required type="password" autoComplete="current-password" value={appleForm.password} disabled={blocked} onChange={e => setAppleForm(previous => ({ ...previous, password: e.target.value }))} /></Field><Field label="Apple 服务区域"><Select value={appleForm.region} disabled onChange={e => setAppleForm(previous => ({ ...previous, region: e.target.value }))}><option value="global">全球</option><option value="cn">中国大陆</option></Select></Field></AnimatedSection> : <AnimatedSection key="apple-verification" className="stack" ref={appleStepPanel} onAnimationComplete={focusAppleStep}><div className="row-actions">{appleResult?.options?.trusted_device && <Button type="button" variant="outline" disabled={blocked} onClick={()=>void explicitAppleAction('send_device_code')}>发送设备验证码</Button>}{appleResult?.options?.sms && <><Select aria-label="验证方式" value={factor} disabled={blocked} onChange={e=>setFactor(e.target.value==='sms'?'sms':'device')}><option value="device">受信任设备</option><option value="sms">短信验证码</option></Select><Select aria-label="电话号码" value={phone} disabled={blocked} onChange={e=>setPhone(e.target.value)}>{appleResult.options.phones.map(p=><option key={p.id} value={p.id}>{p.display}</option>)}</Select><Button type="button" variant="outline" disabled={blocked} onClick={()=>void explicitAppleAction('send_sms')}>发送短信</Button></>}</div><Field label="6 位验证码"><Input required={appleNeedsCode} inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="[0-9]{6}" value={appleForm.code} disabled={blocked||!appleNeedsCode} onChange={e => setAppleForm(previous => ({ ...previous, code: e.target.value }))} /></Field></AnimatedSection>}</AnimatePresence>{intent.current && <p className="text-muted">会话确认后继续您已选择的{intent.current === 'sync-aliases' ? '同步隐私邮箱目录' : '开启自动创建'}。</p>}</form></Modal>
+    <Modal open={appleOpen} onOpenChange={open => { if (!open) closeApple() }}
+      title={appleStep === 'verification' ? appleActionLabel : '登录 Apple 账户'}
+      description={appleStep === 'verification' ? '按 Apple 当前提供的方式继续登录。' : 'Apple 账户密码仅在登录请求中发送，不在浏览器持久保存。'}
+      footer={<>
+        <Button variant="outline" disabled={Boolean(busy)} onClick={closeApple}>取消</Button>
+        {appleStep === 'verification' && <Button variant="ghost" disabled={blocked} onClick={() => { setAppleStep('login'); setAppleError(null); setAppleForm(previous => ({ ...previous, password: '', code: '' })) }}>返回登录</Button>}
+        {!applePending && <Button type="submit" form="apple-auth" disabled={blocked || appleStep === 'verification' && (!appleAction || appleAction === 'verify_security_key')} loading={busy === 'apple-auth'} loadingLabel="正在处理…">{appleStep === 'verification' ? appleActionLabel : '继续'}</Button>}
+      </>}>
+      <form id="apple-auth" className="stack" onSubmit={submitApple}>
+        {applePending && <Alert tone="warning"><div className="stack"><span>原认证请求 {applePending.request_key} 尚待确认，仅查询原请求。</span><Button type="button" variant="outline" disabled={Boolean(busy)} loading={busy === 'query-saved:'+accountRecoveryLabel(applePending)} loadingLabel="正在查询…" onClick={()=>void queryApple()}>查询原认证结果</Button></div></Alert>}
+        {Boolean(appleError) && <Alert error={appleError} attention="focus">{accountErrorHint(appleError)}</Alert>}
+        <AnimatePresence initial={false} mode="wait">{appleStep === 'login' ?
+          <AnimatedSection key="apple-login" className="stack" ref={appleStepPanel} onAnimationComplete={focusAppleStep}>
+            <Field label="Apple ID"><Input required autoComplete="username" value={appleForm.appleId} disabled /></Field>
+            <Field label="Apple 账户密码"><Input required type="password" autoComplete="current-password" value={appleForm.password} disabled={blocked} onChange={e => setAppleForm(previous => ({ ...previous, password: e.target.value }))} /></Field>
+            <Field label="Apple 服务区域"><Select value={appleForm.region} disabled><option value="global">全球</option><option value="cn">中国大陆</option></Select></Field>
+          </AnimatedSection> :
+          <AnimatedSection key="apple-verification" className="stack" ref={appleStepPanel} onAnimationComplete={focusAppleStep}>
+            {appleAction === 'verify_security_key' && <Alert tone="warning">此账户要求使用硬件安全密钥，请前往 Apple 完成验证。</Alert>}
+            {appleAction === 'load_challenge' && <p>请重新读取 Apple 为本次登录提供的验证方式。</p>}
+            {appleNeedsCode && <>
+              <div className="row-actions">
+                {appleResult?.options?.trusted_device && appleResult.options.sms && <Select aria-label="验证方式" value={appleAction === 'verify_sms' ? 'sms' : 'device'} disabled={blocked} onChange={e => { setFactor(e.target.value === 'sms' ? 'sms' : 'device'); setAppleForm(previous => ({...previous,code:''})) }}><option value="device">受信任设备</option><option value="sms">短信验证码</option></Select>}
+                {appleAction === 'verify_device_code' && <Button type="button" variant="outline" disabled={blocked} onClick={() => void explicitAppleAction('send_device_code')}>发送设备验证码</Button>}
+                {appleAction === 'verify_sms' && appleResult?.options && <><Select aria-label="电话号码" value={phone} disabled={blocked} onChange={e => setPhone(e.target.value)}>{appleResult.options.phones.map(p => <option key={p.id} value={p.id}>{p.display}</option>)}</Select><Button type="button" variant="outline" disabled={blocked} onClick={() => void explicitAppleAction('send_sms')}>发送短信</Button></>}
+              </div>
+              <Field label="6 位验证码"><Input required inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="[0-9]{6}" value={appleForm.code} disabled={blocked} onChange={e => setAppleForm(previous => ({ ...previous, code: e.target.value }))} /></Field>
+            </>}
+          </AnimatedSection>}</AnimatePresence>
+        {intent.current && <p className="text-muted">会话确认后继续您已选择的{intent.current === 'sync-aliases' ? '同步隐私邮箱目录' : '开启自动创建'}。</p>}
+      </form>
+    </Modal>
     <Modal open={keysOpen} onOpenChange={open => { if (!busy) { setKeysOpen(open); if (!open) { setKeys(null); setKeysSaved(false); setKeysRefreshFeedback(false) } } }} title="凭据待领取" description="读取不会清空队列。保存到可信位置后，再明确确认；确认不会删除邮箱或改变其状态。" wide footer={<>
       <RefreshButton variant="outline" pending={busy === 'keys-load'} disabled={blocked} onRefresh={loadKeys} onBusyChange={setKeysRefreshFeedback} loadingLabel="正在查询…">重新查询</RefreshButton>
       <Button disabled={blocked || !keysSaved || !keys?.length || !jsonlExport || recovery!==null || keys?.some(k=>!k.apiKey&&!k.bundle)} loading={busy === 'keys-ack'} loadingLabel="正在确认…" onClick={() => void ackKeys()}>确认已保存</Button>

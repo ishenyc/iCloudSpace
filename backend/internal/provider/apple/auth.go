@@ -106,19 +106,7 @@ func (c *Client) VerifyDeviceCode(ctx context.Context, code string) error {
 	if err != nil {
 		return err
 	}
-	// An accepted 409 is an observed Apple HSA2 shape, not general permission
-	// to treat every conflict as success. Require its explicit valid boolean.
-	if response.status == http.StatusConflict {
-		var verdict struct {
-			SecurityCode struct {
-				Valid *bool `json:"valid"`
-			} `json:"securityCode"`
-		}
-		if json.Unmarshal(response.body, &verdict) == nil && verdict.SecurityCode.Valid != nil && *verdict.SecurityCode.Valid {
-			return nil
-		}
-	}
-	return diagnose("verify_device_code", response, true)
+	return deviceCodeVerdict(response)
 }
 
 // TrustSession is explicit and uses a fresh one-attempt transport because

@@ -72,14 +72,23 @@ func (c *Client) VerifyTrustedDeviceCode(ctx context.Context, code string) error
 	if err != nil {
 		return err
 	}
-	if response.status == http.StatusConflict {
-		var verdict struct {
-			SecurityCode struct {
-				Valid *bool `json:"valid"`
-			} `json:"securityCode"`
+	return deviceCodeVerdict(response)
+}
+
+func deviceCodeVerdict(response exchangeResult) error {
+	var verdict struct {
+		SecurityCode struct {
+			Valid *bool `json:"valid"`
+		} `json:"securityCode"`
+	}
+	if json.Unmarshal(response.body, &verdict) == nil && verdict.SecurityCode.Valid != nil {
+		if !*verdict.SecurityCode.Valid {
+			return &Error{Kind: AppleRejected, Operation: "verify_device_code", Status: response.status, Code: responseCode(response.body)}
 		}
-		if json.Unmarshal(response.body, &verdict) == nil && verdict.SecurityCode.Valid != nil && *verdict.SecurityCode.Valid {
-			return nil
+		if response.status == http.StatusConflict {
+			// Apple's device verifier can acknowledge a valid code with 409.
+			// Still check business errors before proceeding to browser trust.
+			response.status = http.StatusOK
 		}
 	}
 	return diagnose("verify_device_code", response, true)

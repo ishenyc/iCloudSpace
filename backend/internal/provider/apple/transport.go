@@ -165,7 +165,7 @@ func (c *Client) exchangeModeLocked(ctx context.Context, operation, method, endp
 		(auth && u.Host != "idmsa.apple.com") || (method != http.MethodGet && method != http.MethodPost && method != http.MethodPut) {
 		return exchangeResult{}, invalid(operation)
 	}
-	if shell && (!auth || mutation || method != http.MethodGet || u.Host != "idmsa.apple.com" || u.Path != "/appleauth/auth/authorize/signin") {
+	if shell && (!auth || mutation || method != http.MethodGet || u.Host != "idmsa.apple.com" || (u.Path != "/appleauth/auth/authorize/signin" && u.Path != "/appleauth/auth")) {
 		return exchangeResult{}, invalid(operation)
 	}
 	trustRequest := mutation && method == http.MethodGet && u.Host == "idmsa.apple.com" && u.Path == "/appleauth/auth/2sv/trust"

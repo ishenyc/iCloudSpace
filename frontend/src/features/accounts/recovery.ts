@@ -1,7 +1,7 @@
 import { AccountRecoveryStore } from '../../control/account-recovery.ts'
 import type { AccountRecovery, AccountRecoveryInput, AccountRecoverySnapshot } from '../../control/account-recovery.ts'
 import type { ControlServices } from '../../control/runtime.ts'
-import type { ProviderAuthResult } from '../../control/provider-session-contracts.ts'
+import type { ProviderAction, ProviderAuthResult } from '../../control/provider-session-contracts.ts'
 import { readPendingBundle } from './model.ts'
 
 export function sameAccountRecovery(left: AccountRecovery | null, right: AccountRecovery): boolean {
@@ -28,7 +28,18 @@ export function providerRecoveryDisposition(result: ProviderAuthResult): 'pendin
   if (!result.durable || !result.receipt || result.receipt.prepared || result.receipt.outcome === 'unknown') return 'pending'
   // A settled MFA step still owns a live flow. Keep its original query pointer
   // across reload, while allowing the next explicitly selected action.
-  return result.state === 'mfa' ? 'continue' : 'terminal'
+  return result.state === 'mfa' || result.state === 'password' && Boolean(result.next_action) ? 'continue' : 'terminal'
+}
+
+export function appleVerificationAction(result: ProviderAuthResult | null, factor: 'device' | 'sms'): ProviderAction | '' {
+  if (!result || providerRecoveryDisposition(result) !== 'continue') return ''
+  const next = result.next_action
+  if (next && next !== 'verify_device_code' && next !== 'verify_sms') return next
+  const options = result.options
+  if (options?.sms && options.phones.length && (factor === 'sms' || !options.trusted_device)) return 'verify_sms'
+  if (options?.trusted_device) return 'verify_device_code'
+  if (options?.security_keys.length) return 'verify_security_key'
+  return 'load_challenge'
 }
 
 /** These are the exact command/query helpers used by AccountDetailPage. The

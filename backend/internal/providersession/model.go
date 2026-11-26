@@ -228,7 +228,7 @@ func actionOutcome(err error) Outcome {
 	}
 	var provider *apple.Error
 	if errors.As(err, &provider) {
-		if provider.Operation == "authorize_shell" {
+		if provider.Operation == "authorize_shell" || provider.Operation == "load_challenge" {
 			return NotSent
 		}
 		if provider.Unknown {

@@ -215,26 +215,55 @@ func (s *Service) result(src source, c challenge, key string) AuthResult {
 	}
 	if len(c.Document.Receipts) > 0 {
 		last := c.Document.Receipts[len(c.Document.Receipts)-1]
+		if last.Prepared || last.Outcome == Unknown {
+			return out
+		}
 		switch last.Action {
 		case Login:
 			if last.ErrorCode == string(apple.SecondFactorRequired) {
-				out.NextAction = LoadChallenge
+				out.NextAction = factorAction(out.Options)
 			} else if last.Outcome == Accepted {
 				out.NextAction = ExchangeToken
 			}
 		case RestoreSession:
 			out.NextAction = ValidateSession
+		case LoadChallenge, SendDeviceCode, SendSMS:
+			out.NextAction = factorAction(out.Options)
+			if last.Action == SendSMS && out.Options != nil && out.Options.SMS {
+				out.NextAction = VerifySMS
+			}
 		case VerifyDeviceCode, VerifySMS, VerifySecurityKey:
+			out.NextAction = factorAction(out.Options)
 			if last.Outcome == Accepted {
 				out.NextAction = TrustBrowser
 			}
 		case TrustBrowser:
+			out.NextAction = TrustBrowser
 			if last.Outcome == Accepted {
 				out.NextAction = ExchangeToken
+			}
+		case ExchangeToken, ValidateSession:
+			if last.ErrorCode == string(apple.SecondFactorRequired) {
+				out.NextAction = LoadChallenge
 			}
 		}
 	}
 	return out
+}
+
+func factorAction(options *apple.AuthOptions) Action {
+	switch {
+	case options == nil:
+		return LoadChallenge
+	case options.TrustedDevice:
+		return VerifyDeviceCode
+	case options.SMS && len(options.Phones) != 0:
+		return VerifySMS
+	case len(options.SecurityKeys) != 0:
+		return VerifySecurityKey
+	default:
+		return LoadChallenge
+	}
 }
 
 // Query is only a local receipt read. A prepared/unknown action remains query
@@ -377,7 +406,9 @@ func (s *Service) Start(ctx context.Context, id int64, actor Actor, key, passwor
 		loginErr := client.Login(ctx, password)
 		var failure *apple.Error
 		if errors.As(loginErr, &failure) && failure.Kind == apple.SecondFactorRequired {
-			_, _ = client.AuthorizeShell(ctx)
+			// Password acceptance remains a separate receipt. A failed options
+			// read leaves no usable factor and can be retried explicitly.
+			_, _ = client.LoadChallengeOptions(ctx)
 		}
 		return loginErr
 	})
@@ -556,7 +587,7 @@ func (s *Service) Perform(ctx context.Context, in AuthInput) (AuthResult, error)
 	return s.runAuth(ctx, gate, prepared, c, in.Actor, in.RequestKey, in.Action, func(client *apple.Client) error {
 		switch in.Action {
 		case LoadChallenge:
-			_, e := client.AuthorizeShell(ctx)
+			_, e := client.LoadChallengeOptions(ctx)
 			return e
 		case SendDeviceCode:
 			return client.RequestDeviceCode(ctx)
